@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Google One 套餐注入器
+Тарифы Google One
 
   python main.py
 
-自动找 adb、连模拟器/手机，缺 frida-server / module_521 就补齐。
-你只需要：设备已 root、已登录 Google 账号、已安装 Google One。
-选套餐后弹出收银台，不会自动点订阅。
+Обнаруживает ADB, подключается к эмулятору или телефону и копирует недостающие компоненты.
+Требуются root-доступ, вход в аккаунт Google и приложение Google One на устройстве.
+После выбора тарифа открывается экран оформления. Подписку подтверждает пользователь.
 
-续费：菜单里按 s 打开「续费叠加」（对应 frida.js 的 STACK=true），
-会把新套餐叠到当前 Google One 订阅上，而不是新开一单。
+Режим продления в меню соответствует STACK=true в frida.js.
+В этом режиме используется действующая подписка Google One.
 """
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ class Adb:
         return rows
 
     def _restart_server(self):
-        info("重启 adb server")
+        info("Перезапуск сервера ADB")
         self._cmd(["kill-server"], serial="")
         time.sleep(0.8)
         self._cmd(["start-server"], serial="")
@@ -215,12 +215,12 @@ class Adb:
             self._restart_server()
             rows = self.devices()
         if not rows:
-            info("没有在线设备，尝试连接本机模拟器端口（MuMu / 雷电 / 夜神）")
+            info("Нет подключённых устройств. Поиск локальных эмуляторов MuMu, LDPlayer и Nox")
             self._connect_emulators()
             time.sleep(0.6)
             rows = self.devices()
         if not rows:
-            info("等待设备上线 ...")
+            info("Ожидание подключения устройства…")
             try:
                 self._cmd(["wait-for-device"], serial="", timeout=15)
             except subprocess.TimeoutExpired:
@@ -230,27 +230,27 @@ class Adb:
             rows = self.devices()
         rows = self._dedupe(rows)
         if not rows:
-            fail("没有可用的 adb 设备。请先启动模拟器或插上手机并打开 USB 调试。")
+            fail("ADB не видит устройств. Запустите эмулятор или подключите телефон с включённой отладкой по USB.")
             sys.exit(1)
         return rows
 
     def pick(self):
         rows = self.discover()
         if self.serial and self.serial in rows:
-            ok(f"设备 {self.serial}")
+            ok(f"Устройство: {self.serial}")
             return self.serial
         if self.serial and self.serial not in rows:
-            warn(f"指定的 {self.serial} 不在线，改自动选择")
+            warn(f"Устройство {self.serial} недоступно. Включён автоматический выбор")
         if len(rows) == 1:
             self.serial = rows[0]
         else:
             ranked = sorted(rows, key=self._score, reverse=True)
             self.serial = ranked[0]
-            info("检测到多台设备，自动选分最高的一台：")
+            info("Найдено несколько устройств. Выбрано устройство с наибольшей оценкой:")
             for s in ranked:
                 info(f"  {s}  score={self._score(s)}")
         os.environ["ANDROID_SERIAL"] = self.serial
-        ok(f"设备 {self.serial}")
+        ok(f"Устройство: {self.serial}")
         return self.serial
 
 
@@ -281,7 +281,7 @@ def grouped_plans(plans):
             used.update(pid for pid, _ in items)
     extra = [(pid, plans[pid]) for pid in plans if pid not in used]
     if extra:
-        groups.append(("其他", extra))
+        groups.append(("Другие", extra))
     return groups
 
 
@@ -296,12 +296,12 @@ def flatten_menu(groups):
 def print_menu(plans, stack, addon):
     groups = grouped_plans(plans)
     rows = flatten_menu(groups)
-    mode = "续费叠加（STACK=true，叠到现有订阅上）" if stack else "新购（STACK=false）"
+    mode = "Продление действующей подписки (STACK=true)" if stack else "Новая подписка (STACK=false)"
     print()
     print("=" * 64)
-    print("  Google One 套餐注入")
-    print(f"  模式: {mode}")
-    print(f"  附加: {addon or '无'}")
+    print("  Тарифы Google One")
+    print(f"  Режим: {mode}")
+    print(f"  Дополнение: {addon or 'нет'}")
     print("=" * 64)
     n = 1
     index = {}
@@ -313,13 +313,13 @@ def print_menu(plans, stack, addon):
             index[pid] = pid
             n += 1
     print()
-    print("  输入编号或套餐名下单")
-    print("  s  切换续费叠加（需要设备上已有 Google One 订阅）")
-    print("  a  设置 YouTube 附加套餐")
-    print("  e  检测并补齐环境")
-    print("  g  重启 Google One 并重新注入")
-    print("  l  重新列出套餐")
-    print("  q  退出")
+    print("  Введите номер или название тарифа")
+    print("  s  Переключить режим продления (требуется действующая подписка Google One)")
+    print("  a  Выбрать дополнительный тариф YouTube")
+    print("  e  Проверить и подготовить окружение")
+    print("  g  Перезапустить Google One и загрузить скрипт повторно")
+    print("  l  Показать тарифы ещё раз")
+    print("  q  Выход")
     print()
     return index, rows
 
@@ -342,21 +342,21 @@ def host_frida_version():
 def ensure_host_frida():
     ver = host_frida_version()
     if ver:
-        ok(f"本机 frida {ver}")
+        ok(f"Версия Frida на компьютере: {ver}")
         return ver
-    warn("本机没有 frida，正在 pip install frida-tools ...")
+    warn("Frida не найдена на компьютере. Установка frida-tools через pip…")
     r = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-U", "frida-tools"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode != 0:
-        fail((r.stderr or r.stdout or "pip 失败").strip()[:400])
+        fail((r.stderr or r.stdout or "Ошибка pip").strip()[:400])
         sys.exit(1)
     ver = host_frida_version()
     if not ver:
-        fail("安装了 frida-tools 但仍找不到 frida。请检查 PATH。")
+        fail("Пакет frida-tools установлен, но команда frida недоступна. Проверьте PATH.")
         sys.exit(1)
-    ok(f"本机 frida {ver}")
+    ok(f"Версия Frida на компьютере: {ver}")
     return ver
 
 
@@ -399,13 +399,13 @@ def remote_exists(path):
 
 def ensure_module():
     if remote_exists(DEX_REMOTE):
-        ok(f"module_521.apk 已在设备 {DEX_REMOTE}")
+        ok(f"Модуль уже есть на устройстве: {DEX_REMOTE}")
         return
-    info("设备缺少 module_521.apk，正在从内置 dex 解开并 push ...")
+    info("Модуль module_521.apk отсутствует. Распаковка встроенного DEX и копирование на устройство…")
     try:
         from module_b64 import MODULE_B64
     except Exception as e:
-        fail(f"读不到 module_b64.py: {e}")
+        fail(f"Не удалось прочитать module_b64.py: {e}")
         sys.exit(1)
     import base64
     tmp = Path(tempfile.gettempdir()) / "module_521.apk"
@@ -414,9 +414,9 @@ def ensure_module():
     print((r.stdout or r.stderr or "").strip(), flush=True)
     adb.shell("chmod", "644", DEX_REMOTE)
     if not remote_exists(DEX_REMOTE):
-        fail("push module_521.apk 失败")
+        fail("Не удалось скопировать module_521.apk на устройство")
         sys.exit(1)
-    ok("module_521.apk 已推送")
+    ok("Модуль module_521.apk скопирован")
 
 
 def _xz_to_file(xz_path, dest):
@@ -451,7 +451,7 @@ def local_frida_server(abi_tag):
     for xz in xz_candidates:
         if not xz.is_file():
             continue
-        info(f"解压 {xz.name} ...")
+        info(f"Распаковка {xz.name}…")
         return _xz_to_file(xz, unpacked)
     return None
 
@@ -462,11 +462,11 @@ def download_frida_server(ver, abi_tag):
     name = f"frida-server-{ver}-{abi_tag}.xz"
     url = f"https://github.com/frida/frida/releases/download/{ver}/{name}"
     xz = cache / name
-    info(f"下载 {url}")
+    info(f"Загрузка {url}")
     try:
         urllib.request.urlretrieve(url, xz)
     except Exception as e:
-        fail(f"下载失败: {e}")
+        fail(f"Ошибка загрузки: {e}")
         return None
     dest = cache / f"frida-server-{ver}-{abi_tag}"
     return _xz_to_file(xz, dest)
@@ -498,18 +498,18 @@ def ensure_frida_server(ver):
     abi = device_abi()
     abi_tag = ABI_ASSET.get(abi, "")
     if not abi_tag:
-        fail(f"无法识别设备 ABI: {abi!r}")
+        fail(f"Неизвестная архитектура устройства: {abi!r}")
         sys.exit(1)
-    info(f"设备 ABI {abi} -> {abi_tag}")
+    info(f"Архитектура устройства: {abi} -> {abi_tag}")
 
     remote_ver = remote_frida_version()
     running = (adb.shell("pidof", "frida-server") or "").strip()
     if running and remote_ver == ver:
-        ok(f"frida-server {remote_ver} 已在跑 pid={running.split()[0]}")
+        ok(f"frida-server {remote_ver} уже запущен, PID={running.split()[0]}")
         return
 
     if remote_ver and remote_ver != ver:
-        warn(f"设备 frida-server {remote_ver} 和本机 {ver} 不一致，将替换")
+        warn(f"Версия сервера на устройстве ({remote_ver}) отличается от локальной ({ver}). Сервер будет заменён")
 
     local = None
     cache = HERE / "assets" / f"frida-server-{ver}-{abi_tag}"
@@ -520,7 +520,7 @@ def ensure_frida_server(ver):
     if local is None:
         local = local_frida_server(abi_tag)
     if local is None:
-        fail("无法准备 frida-server。请把对应 ABI 的文件放到 Gemini/assets/ 或 ../bin/")
+        fail("Не удалось подготовить frida-server. Ожидался файл для архитектуры устройства в assets/ или ../bin/")
         sys.exit(1)
 
     if running:
@@ -533,35 +533,35 @@ def ensure_frida_server(ver):
 
     running = start_remote_frida()
     if not running:
-        fail("frida-server 启动失败。设备需要 root。")
+        fail("Не удалось запустить frida-server. Устройству требуется root-доступ.")
         sys.exit(1)
-    ok(f"frida-server {ver} 已启动 pid={running.split()[0]}")
+    ok(f"frida-server {ver} запущен, PID={running.split()[0]}")
 
 
 def ensure_google_one():
     path = adb.shell("pm", "path", PKG)
     if "package:" in path:
-        ok("Google One 已安装")
+        ok("Google One установлен")
         return
-    fail("设备上没有 Google One（com.google.android.apps.subscriptions.red）")
-    fail("请先从 Play Store 安装 Google One。")
+    fail("На устройстве отсутствует Google One (com.google.android.apps.subscriptions.red)")
+    fail("Приложение Google One доступно в Google Play.")
     sys.exit(1)
 
 
 def ensure_google_account():
     accts = google_accounts()
     if accts:
-        ok("Google 账号: " + ", ".join(accts))
+        ok("Аккаунты Google: " + ", ".join(accts))
         return accts
-    fail("设备上没有登录 Google 账号。请先在系统设置或 Play Store 登录。")
+    fail("На устройстве не выполнен вход в аккаунт Google. Войдите через настройки Android или Google Play.")
     sys.exit(1)
 
 
 def ensure_root():
     if has_root():
-        ok("设备已 root")
+        ok("На устройстве доступен root")
         return
-    fail("设备没有 root（su 失败）。请先 root 后再运行。")
+    fail("На устройстве нет root-доступа: проверка su не прошла.")
     sys.exit(1)
 
 
@@ -569,16 +569,16 @@ def print_env(ver):
     accts = google_accounts()
     print()
     print("-" * 64)
-    print("  环境")
+    print("  Окружение")
     print("-" * 64)
-    print(f"  设备          {adb.serial}")
+    print(f"  Устройство    {adb.serial}")
     print(f"  ABI           {device_abi() or '?'}")
-    print(f"  root          {'是' if has_root() else '否'}")
-    print(f"  Google 账号   {', '.join(accts) if accts else '无'}")
-    print(f"  本机 frida    {ver or '无'}")
-    print(f"  frida-server  {(adb.shell('pidof', 'frida-server') or '未运行').split()[0]}")
-    print(f"  module_521    {'有' if remote_exists(DEX_REMOTE) else '无'}")
-    g1 = "有" if "package:" in adb.shell("pm", "path", PKG) else "无"
+    print(f"  root          {'да' if has_root() else 'нет'}")
+    print(f"  Аккаунты Google   {', '.join(accts) if accts else 'нет'}")
+    print(f"  Frida на ПК    {ver or 'нет'}")
+    print(f"  frida-server  {(adb.shell('pidof', 'frida-server') or 'остановлен').split()[0]}")
+    print(f"  module_521    {'есть' if remote_exists(DEX_REMOTE) else 'нет'}")
+    g1 = "есть" if "package:" in adb.shell("pm", "path", PKG) else "нет"
     print(f"  Google One    {g1}")
     print("-" * 64)
 
@@ -620,7 +620,7 @@ def start_google_one():
             pid = got[0]
             break
     if not pid:
-        fail("Google One 没有启动起来")
+        fail("Не удалось запустить Google One")
         sys.exit(1)
     time.sleep(2.5)
     pid = (g1_pid() or [pid])[0]
@@ -629,12 +629,12 @@ def start_google_one():
 
 
 def post_frida_bridge(script, name):
-    """Frida 17 把 Java 桥拆出去了，脚本一用 Java.perform 就会要这份源码。"""
+    """В Frida 17 мост Java поставляется отдельно. Для Java.perform скрипт запрашивает его исходный код."""
     try:
         import frida_tools
         root = Path(frida_tools.__file__).resolve().parent / "bridges"
     except Exception as e:
-        fail(f"找不到 frida_tools/bridges: {e}")
+        fail(f"Не найден каталог frida_tools/bridges: {e}")
         return False
     stem = (name or "java").lower()
     for p in root.glob("*.js"):
@@ -645,7 +645,7 @@ def post_frida_bridge(script, name):
                 "source": p.read_text(encoding="utf-8"),
             })
             return True
-    fail(f"没有名为 {stem} 的 Frida bridge")
+    fail(f"Не найден мост Frida с именем {stem}")
     return False
 
 
@@ -666,7 +666,7 @@ class Session:
             return
         payload = message.get("payload") or {}
         if isinstance(payload, dict) and payload.get("type") == "frida:load-bridge":
-            info(f"加载 Frida bridge: {payload.get('name')}")
+            info(f"Загрузка моста Frida: {payload.get('name')}")
             post_frida_bridge(self.script, payload.get("name") or "java")
             return
         if not isinstance(payload, dict):
@@ -686,9 +686,9 @@ class Session:
         if ev == "launched":
             code = str(payload.get("code", ""))
             if code == "0":
-                ok("收银台已弹出，去设备上确认即可（不会自动点订阅）")
+                ok("Экран оформления открыт. Для подписки требуется подтверждение на устройстве.")
             else:
-                warn(f"launchBillingFlow 返回 code={code} {payload.get('msg', '')}")
+                warn(f"Код ответа launchBillingFlow: {code} {payload.get('msg', '')}")
 
     def attach(self, pid):
         import frida
@@ -710,16 +710,16 @@ class Session:
             java_js = Path(frida_tools.__file__).resolve().parent / "bridges" / "java.js"
             if java_js.is_file():
                 js = java_js.read_text(encoding="utf-8") + "\n;var Java = bridge;\n" + js
-                info("已内嵌 frida-java-bridge")
+                info("Встроен frida-java-bridge")
         except Exception as e:
-            warn(f"未能内嵌 Java bridge: {e}")
+            warn(f"Не удалось встроить мост Java: {e}")
         self.script = self.session.create_script(js)
         self.script.on("message", self._on_message)
         self.script.load()
         if not self.ready.wait(timeout=20):
-            warn("BillingClient 未在 20 秒内就绪，仍可尝试下单")
+            warn("BillingClient не сообщил о готовности за 20 секунд. Оформление всё ещё доступно.")
         else:
-            ok("BillingClient 就绪")
+            ok("BillingClient готов")
 
     def _exports(self):
         sc = self.script
@@ -749,7 +749,7 @@ class Session:
             ret = rpc(("stack",) if stack else ("buy",), plan_id)
             info(ret)
         except Exception as e:
-            warn(f"rpc 调用失败，改用 post: {e}")
+            warn(f"Ошибка вызова RPC, переход на post: {e}")
             self.script.post({
                 "type": "cfg",
                 "payload": {"target": plan_id, "stack": stack, "addon": addon},
@@ -772,11 +772,11 @@ class Session:
 
 def pick_addon(plans):
     yt = [pid for pid in ("yt_1m", "yt_family", "yt_lite") if pid in plans]
-    print("附加套餐（会和主套餐一起提交）：")
-    print("  0. 无")
+    print("Дополнительный тариф будет отправлен вместе с основным:")
+    print("  0. нет")
     for i, pid in enumerate(yt, 1):
         print(f"  {i}. {pid}  {plans[pid]['note']}")
-    raw = input("选择: ").strip() or "0"
+    raw = input("Выбор: ").strip() or "0"
     if raw in ("0", "n", "none", ""):
         return ""
     if raw in plans:
@@ -788,13 +788,13 @@ def pick_addon(plans):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Google One 套餐注入")
+    p = argparse.ArgumentParser(description="Тарифы Google One")
     p.add_argument("-s", "--serial", default=os.environ.get("ANDROID_SERIAL") or "")
-    p.add_argument("--plan", default="", help="直接下单套餐名或菜单编号，不进交互")
+    p.add_argument("--plan", default="", help="Название или номер тарифа для оформления без меню")
     p.add_argument("--stack", "--renew", action="store_true",
-                   help="续费叠加：在现有 Google One 订阅上叠加（frida.js STACK=true）")
-    p.add_argument("--addon", default="", help="附加套餐 id，例如 yt_1m")
-    p.add_argument("--wait", type=float, default=8.0, help="下单后等待秒数")
+                   help="Режим продления действующей подписки Google One (STACK=true в frida.js)")
+    p.add_argument("--addon", default="", help="Идентификатор дополнительного тарифа, например yt_1m")
+    p.add_argument("--wait", type=float, default=8.0, help="Время ожидания после запроса в секундах")
     return p.parse_args()
 
 
@@ -816,11 +816,11 @@ def main():
         os.environ["ANDROID_SERIAL"] = args.serial
 
     if not JS_PATH.is_file():
-        fail(f"找不到 {JS_PATH}")
+        fail(f"Файл не найден: {JS_PATH}")
         sys.exit(1)
     plans = parse_plans(JS_PATH.read_text(encoding="utf-8"))
     if not plans:
-        fail("frida.js 里没有解析到 PLANS")
+        fail("Не удалось прочитать PLANS из frida.js")
         sys.exit(1)
 
     ensure_env()
@@ -837,11 +837,11 @@ def main():
     if args.plan:
         plan_id = resolve_plan(args.plan, plans, index)
         if not plan_id:
-            fail(f"未知套餐 {args.plan!r}")
+            fail(f"Неизвестный тариф {args.plan!r}")
             sess.close()
             sys.exit(1)
         spec = plans[plan_id]
-        info(f"{'续费叠加' if stack else '新购'} {plan_id}  sku={spec['sku']}  offer={spec['offer']}")
+        info(f"{'Продление' if stack else 'Новая подписка'} {plan_id}  sku={spec['sku']}  offer={spec['offer']}")
         info(spec["note"])
         sess.buy(plan_id, stack=stack, addon=addon)
         time.sleep(max(args.wait, 1.0))
@@ -864,11 +864,11 @@ def main():
                 continue
             if low == "s":
                 stack = not stack
-                ok("续费叠加: 开（会叠到现有订阅上）" if stack else "续费叠加: 关（新购）")
+                ok("Продление действующей подписки включено" if stack else "Продление выключено (новая подписка)")
                 continue
             if low == "a":
                 addon = pick_addon(plans)
-                ok(f"附加套餐: {addon or '无'}")
+                ok(f"Дополнительный тариф: {addon or 'нет'}")
                 continue
             if low == "e":
                 ensure_env()
@@ -880,19 +880,19 @@ def main():
                 continue
             plan_id = index.get(raw) or index.get(low)
             if not plan_id:
-                warn("无法识别输入。输入编号、套餐名，或 q 退出。")
+                warn("Команда не распознана. Введите номер, название тарифа или q для выхода.")
                 continue
             spec = plans[plan_id]
-            info(f"{'续费叠加' if stack else '新购'} {plan_id}  sku={spec['sku']}  offer={spec['offer']}")
+            info(f"{'Продление' if stack else 'Новая подписка'} {plan_id}  sku={spec['sku']}  offer={spec['offer']}")
             info(spec["note"])
             sess.buy(plan_id, stack=stack, addon=addon)
             time.sleep(1.2)
     except KeyboardInterrupt:
         print()
-        warn("已中断")
+        warn("Прервано")
     finally:
         sess.close()
-        info("结束")
+        info("Работа завершена")
 
 
 if __name__ == "__main__":
