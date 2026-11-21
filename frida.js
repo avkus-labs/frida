@@ -1,39 +1,39 @@
 var TARGET = "";
-var STACK = false; // false=新购，true=续费叠加到现有订阅（ReplacementMode=5 CHARGE_FULL_PRICE）
+var STACK = false; // false — новая подписка, true — продление действующей (ReplacementMode=5, CHARGE_FULL_PRICE)
 var ADDON = "";
 
 var PLANS = {
-  pro_12m:    { sku: "g1.2tb.ai.subs_variant", offer: "12months-eft",        note: "Pro 5TB 免费12个月，之后 $19.99/月" },
-  pro_6m:     { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft",         note: "Pro 5TB 免费6个月，之后 $19.99/月" },
-  pro_6m_2:   { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft-2",       note: "Pro 5TB 免费6个月（第二档，可叠），之后 $19.99/月" },
-  pro_6m_ss:  { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft-ss-2026", note: "Pro 5TB 免费6个月（SS 2026），之后 $19.99/月" },
-  pro_play_3m:{ sku: "g1.play.2tb.ai",            offer: "eft-3mo",      note: "Pro 5TB 免费3个月，之后 $19.99/月" },
-  plus_6m:    { sku: "g1.2tb.subs_variant", offer: "6months-eft", note: "Plus 2TB 免费6个月，之后 $9.99/月" },
-  plus_3m:    { sku: "g1.2tb.subs_variant", offer: "3months-eft", note: "Plus 2TB 免费3个月，之后 $9.99/月" },
-  plus_2tb_6m:{ sku: "g1.2tb.6months_eft",  offer: "freetrial",   note: "Plus 2TB 免费6个月，之后 $9.99/月" },
-  helium_12m: { sku: "g1.play.helium", offer: "eft-12mo", note: "Plus 400GB 免费12个月，之后 $4.99/月" },
-  helium_6m:  { sku: "g1.play.helium", offer: "eft-6mo",  note: "Plus 400GB 免费6个月，之后 $4.99/月" },
-  helium_3m:  { sku: "g1.play.helium", offer: "eft-3mo",  note: "Plus 400GB 免费3个月，之后 $4.99/月" },
-  helium_1m:  { sku: "g1.play.helium", offer: "eft-1mo",  note: "Plus 400GB 免费1个月，之后 $4.99/月" },
-  yt_1m:      { sku: "g1.youtube_premium_individual_add_on", offer: "eft-1mo", note: "YouTube Premium 个人版 免费1个月，之后 $11.99/月" },
-  yt_family:  { sku: "g1.youtube_premium_family_add_on",     offer: "eft-1mo", note: "YouTube Premium 家庭版 免费1个月" },
-  yt_lite:    { sku: "g1.youtube_premium_lite_add_on",       offer: "eft-1mo", note: "YouTube Premium Lite 免费1个月" },
-  helium_3m_75:  { sku: "g1.helium.3months_ip_75p.acq", offer: "introprice", note: "$1.29 Plus 400GB 3个月，之后 $4.99/月" },
-  plus_2tb_85:   { sku: "g1.2tb.3months_ip_85p.acq",    offer: "introprice", note: "$1.49 Plus 2TB 3个月，之后 $9.99/月" },
-  pro_3m_75:     { sku: "g1.2tb.ai.3months_ip_75p.acq", offer: "introprice", note: "$4.99 Pro 5TB 3个月，之后 $19.99/月" },
-  pro10_1m_90:   { sku: "g1.10tb.1month_ip_90p",        offer: "introprice", note: "$4.99 Pro 10TB 1个月，之后 $49.99/月" },
-  pro10_3m_85:   { sku: "g1.10tb.3months_ip_85p",       offer: "introprice", note: "$7.49 Pro 10TB 3个月，之后 $49.99/月" },
-  ultra20_3m_90: { sku: "g1.20tb.3months_ip_90p.acq",   offer: "introprice", note: "$9.99 Ultra 5x（20TB）3个月，之后 $99.99/月" },
-  ultra20_3m_80: { sku: "g1.20tb.3months_ip_80p.acq",   offer: "introprice", note: "$19.99 Ultra 5x（20TB）3个月，之后 $99.99/月" },
-  ultra20_3m_75: { sku: "g1.20tb.3months_ip_75p.acq",   offer: "introprice", note: "$24.99 Ultra 5x（20TB）3个月，之后 $99.99/月" },
-  ultra_1m_90:   { sku: "g1.ai.ultra.1month_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x（30TB）1个月，之后 $199.99/月" },
-  ultra_3m_90:   { sku: "g1.ai.ultra.3months_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x（30TB）3个月，之后 $199.99/月" },
-  ultra_3m_80:   { sku: "g1.ai.ultra.3months_ip_80p.acq", offer: "introprice", note: "$39.99 Ultra 20x（30TB）3个月，之后 $199.99/月" },
-  ultra_1m_75:   { sku: "g1.ai.ultra.1month_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x（30TB）1个月，之后 $199.99/月" },
-  ultra_3m_75:   { sku: "g1.ai.ultra.3months_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x（30TB）3个月，之后 $199.99/月" }
+  pro_12m:    { sku: "g1.2tb.ai.subs_variant", offer: "12months-eft",        note: "Pro 5 ТБ 12 месяцев бесплатно, затем $19.99/мес." },
+  pro_6m:     { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft",         note: "Pro 5 ТБ 6 месяцев бесплатно, затем $19.99/мес." },
+  pro_6m_2:   { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft-2",       note: "Pro 5 ТБ 6 месяцев бесплатно (второй вариант, допускает продление), затем $19.99/мес." },
+  pro_6m_ss:  { sku: "g1.2tb.ai.subs_variant", offer: "6months-eft-ss-2026", note: "Pro 5 ТБ 6 месяцев бесплатно (SS 2026), затем $19.99/мес." },
+  pro_play_3m:{ sku: "g1.play.2tb.ai",            offer: "eft-3mo",      note: "Pro 5 ТБ 3 месяца бесплатно, затем $19.99/мес." },
+  plus_6m:    { sku: "g1.2tb.subs_variant", offer: "6months-eft", note: "Plus 2 ТБ 6 месяцев бесплатно, затем $9.99/мес." },
+  plus_3m:    { sku: "g1.2tb.subs_variant", offer: "3months-eft", note: "Plus 2 ТБ 3 месяца бесплатно, затем $9.99/мес." },
+  plus_2tb_6m:{ sku: "g1.2tb.6months_eft",  offer: "freetrial",   note: "Plus 2 ТБ 6 месяцев бесплатно, затем $9.99/мес." },
+  helium_12m: { sku: "g1.play.helium", offer: "eft-12mo", note: "Plus 400 ГБ 12 месяцев бесплатно, затем $4.99/мес." },
+  helium_6m:  { sku: "g1.play.helium", offer: "eft-6mo",  note: "Plus 400 ГБ 6 месяцев бесплатно, затем $4.99/мес." },
+  helium_3m:  { sku: "g1.play.helium", offer: "eft-3mo",  note: "Plus 400 ГБ 3 месяца бесплатно, затем $4.99/мес." },
+  helium_1m:  { sku: "g1.play.helium", offer: "eft-1mo",  note: "Plus 400 ГБ 1 месяц бесплатно, затем $4.99/мес." },
+  yt_1m:      { sku: "g1.youtube_premium_individual_add_on", offer: "eft-1mo", note: "YouTube Premium (индивидуальный) 1 месяц бесплатно, затем $11.99/мес." },
+  yt_family:  { sku: "g1.youtube_premium_family_add_on",     offer: "eft-1mo", note: "YouTube Premium (семейный) 1 месяц бесплатно" },
+  yt_lite:    { sku: "g1.youtube_premium_lite_add_on",       offer: "eft-1mo", note: "YouTube Premium Lite 1 месяц бесплатно" },
+  helium_3m_75:  { sku: "g1.helium.3months_ip_75p.acq", offer: "introprice", note: "$1.29 Plus 400 ГБ 3 месяца, затем $4.99/мес." },
+  plus_2tb_85:   { sku: "g1.2tb.3months_ip_85p.acq",    offer: "introprice", note: "$1.49 Plus 2 ТБ 3 месяца, затем $9.99/мес." },
+  pro_3m_75:     { sku: "g1.2tb.ai.3months_ip_75p.acq", offer: "introprice", note: "$4.99 Pro 5 ТБ 3 месяца, затем $19.99/мес." },
+  pro10_1m_90:   { sku: "g1.10tb.1month_ip_90p",        offer: "introprice", note: "$4.99 Pro 10 ТБ 1 месяц, затем $49.99/мес." },
+  pro10_3m_85:   { sku: "g1.10tb.3months_ip_85p",       offer: "introprice", note: "$7.49 Pro 10 ТБ 3 месяца, затем $49.99/мес." },
+  ultra20_3m_90: { sku: "g1.20tb.3months_ip_90p.acq",   offer: "introprice", note: "$9.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
+  ultra20_3m_80: { sku: "g1.20tb.3months_ip_80p.acq",   offer: "introprice", note: "$19.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
+  ultra20_3m_75: { sku: "g1.20tb.3months_ip_75p.acq",   offer: "introprice", note: "$24.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
+  ultra_1m_90:   { sku: "g1.ai.ultra.1month_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x (30 ТБ) 1 месяц, затем $199.99/мес." },
+  ultra_3m_90:   { sku: "g1.ai.ultra.3months_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." },
+  ultra_3m_80:   { sku: "g1.ai.ultra.3months_ip_80p.acq", offer: "introprice", note: "$39.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." },
+  ultra_1m_75:   { sku: "g1.ai.ultra.1month_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x (30 ТБ) 1 месяц, затем $199.99/мес." },
+  ultra_3m_75:   { sku: "g1.ai.ultra.3months_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." }
 };
 
-var STACK_MODE = 5; // CHARGE_FULL_PRICE，叠加必须走这个
+var STACK_MODE = 5; // Для продления используется CHARGE_FULL_PRICE
 var DEX_PATHS = [
   "/data/local/tmp/module_521.apk",
   "/data/local/tmp/billing.apk"
@@ -437,7 +437,7 @@ function run(target, stack) {
   }
   if (STACK) {
     queryPurchasesThen(function (tok) {
-      if (!tok) { log("no_purchase", { m: "当前账号没有可叠加的订阅" }); return; }
+      if (!tok) { log("no_purchase", { m: "У текущего аккаунта нет подписки, подходящей для продления" }); return; }
       queryOfferThen(spec, tok);
     });
   } else {
