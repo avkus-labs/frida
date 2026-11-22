@@ -151,7 +151,14 @@ function queryOne() {
 }
 
 function boot() {
-  if (!loadBilling()) { log("done", {}); return; }
+  if (!loadBilling()) {
+    // Раньше здесь был только done — и scan-offers.sh ждал RESULT
+    // все 25 секунд, а потом писал error без причины. Теперь причина
+    // видна сразу: BillingClient не найден (нет module_521.apk).
+    log("RESULT", { sku: TARGET_SKU, offer: TARGET_OFFER, status: "error", code: "boot_err" });
+    log("done", {});
+    return;
+  }
   var BillingClient = Java.use("com.android.billingclient.api.BillingClient");
   var PUL = Java.use("com.android.billingclient.api.PurchasesUpdatedListener");
   var Lst = Java.registerClass({

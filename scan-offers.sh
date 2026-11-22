@@ -14,6 +14,7 @@
 # Прогресс — в терминал: [i/N] (процент) ключ sku offer -> live/missing/error.
 # Итог — в scan-results-YYYYMMDD-HHMMSS.log рядом со скриптом, по строке
 # на оффер: ключ, sku, offer, статус, цена первого периода, период.
+# Лог неудачного оффера сохраняется рядом: scan-fail-<ключ>.log.
 #
 # Требования: эмулятор/телефон по adb, frida-server запущен от root
 # (см. README, раздел про su), Google One установлен, на устройстве
@@ -24,7 +25,12 @@
 #   ./scan-offers.sh --serial emulator-5554   # явно выбрать устройство
 #   ./scan-offers.sh --delay 10               # другая задержка между офферами
 #   ./scan-offers.sh --start 40               # продолжить с 40-го оффера
+#   ./scan-offers.sh --one lite_base          # один оффер, для отладки
+#   ./scan-offers.sh --one lite_base --verbose  # один оффер + весь вывод frida
 #   ./scan-offers.sh --dry-run                # только показать, что будет сделано
+#
+# Если первые офферы дают error — скрипт останавливается после 5 ошибок
+# подряд и говорит, что проверить (см. --max-errors). Не надо ждать все 109.
 #
 set -u
 cd "$(dirname "$0")"
@@ -35,6 +41,9 @@ TEMPLATE="probe-single.js"
 DELAY=5
 TIMEOUT=25
 START=1
+MAX_ERRORS=5
+ONLY=""
+VERBOSE=0
 SERIAL="${ANDROID_SERIAL:-emulator-5554}"
 DRY_RUN=0
 
@@ -45,15 +54,19 @@ while [ $# -gt 0 ]; do
     --delay)   DELAY="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --start)   START="$2"; shift 2 ;;
+    --max-errors) MAX_ERRORS="$2"; shift 2 ;;
+    --one)     ONLY="$2"; shift 2 ;;
+    --verbose) VERBOSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      sed -n '2,30p' "$0"; exit 0 ;;
+      sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "Неизвестный аргумент: $1 (см. --help)" >&2; exit 2 ;;
   esac
 done
 
 [ -f "$OFFERS_FILE" ] || { echo "Нет файла $OFFERS_FILE" >&2; exit 1; }
 [ -f "$TEMPLATE" ] || { echo "Нет файла $TEMPLATE" >&2; exit 1; }
+
 TOTAL=$(grep -c . "$OFFERS_FILE")
 [ "$TOTAL" -gt 0 ] || { echo "Файл $OFFERS_FILE пуст" >&2; exit 1; }
 echo "Офферов в списке: $TOTAL, задержка ${DELAY}с, устройство $SERIAL"
@@ -63,6 +76,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
     i=$((i + 1))
     [ "$i" -lt "$START" ] && continue
+    [ -n "$ONLY" ] && [ "$key" != "$ONLY" ] && continue
     printf '[%s/%s] %s  sku=%s offer=%s\n' "$i" "$TOTAL" "$key" "$sku" "${offer:-<базовый>}"
   done < "$OFFERS_FILE"
   echo "Dry-run: ничего не запускалось."
@@ -74,6 +88,34 @@ command -v adb >/dev/null || { echo "Нет adb в PATH" >&2; exit 1; }
 command -v frida >/dev/null || { echo "Нет frida CLI в PATH (pip install frida-tools)" >&2; exit 1; }
 adb -s "$SERIAL" shell echo ok >/dev/null 2>&1 || { echo "Устройство $SERIAL не отвечает по adb" >&2; exit 1; }
 
+# frida-server: запущен ли и от root ли. Это главный затык: запущенный
+# как shell сервер не даёт attach к Google One (PermissionDenied),
+# а скрипт тогда получает error на каждом оффере без объяснения.
+FRIDA_SRV_PID=$(adb -s "$SERIAL" shell pidof frida-server 2>/dev/null | tr -d '\r' | awk '{print $1}')
+if [ -z "$FRIDA_SRV_PID" ]; then
+  echo "ВНИМАНИЕ: frida-server не запущен. Запусти его от root (см. README, раздел про su), иначе attach не пройдёт." >&2
+else
+  FRIDA_SRV_USER=$(adb -s "$SERIAL" shell ps -A 2>/dev/null | grep '[f]rida-server' | awk '{print $1}' | head -1 | tr -d '\r')
+  if [ "$FRIDA_SRV_USER" != "root" ]; then
+    echo "ВНИМАНИЕ: frida-server запущен как '${FRIDA_SRV_USER:-?}', а не как root. Attach к Google One будет отклонён (PermissionDenied) — каждый оффер даст error." >&2
+    echo "Перезапусти от root: adb -s $SERIAL shell su -c 'killall -9 frida-server'; adb -s $SERIAL shell su -c '/data/local/tmp/frida-server -D &'" >&2
+  else
+    echo "frida-server запущен от root, PID=$FRIDA_SRV_PID"
+  fi
+fi
+
+# module_521.apk: без него probe не найдёт BillingClient (boot_err).
+if ! adb -s "$SERIAL" shell ls /data/local/tmp/module_521.apk >/dev/null 2>&1; then
+  echo "ВНИМАНИЕ: на устройстве нет /data/local/tmp/module_521.apk. probe не найдёт BillingClient. Запусти один раз main.py — он сам его докинет — или: adb -s $SERIAL push module_521.apk /data/local/tmp/ (файл распаковывается из module_b64.py)." >&2
+fi
+
+# Видит ли frida это устройство вообще (emulator-5554 — по adb, не USB).
+if command -v frida-ls-devices >/dev/null 2>&1; then
+  if ! frida-ls-devices 2>/dev/null | grep -q "$SERIAL"; then
+    echo "ВНИМАНИЕ: frida-ls-devices не показывает $SERIAL. frida -U может не найти устройство." >&2
+  fi
+fi
+
 G1_PID=$(adb -s "$SERIAL" shell pidof "$PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}')
 if [ -z "$G1_PID" ]; then
   echo "Google One не запущен, запускаю..."
@@ -83,10 +125,6 @@ if [ -z "$G1_PID" ]; then
   [ -n "$G1_PID" ] || { echo "Не удалось запустить Google One" >&2; exit 1; }
 fi
 echo "Google One pid=$G1_PID"
-
-if [ -z "$(adb -s "$SERIAL" shell pidof frida-server 2>/dev/null | tr -d '\r')" ]; then
-  echo "ВНИМАНИЕ: frida-server не запущен. Запусти его от root (см. README, раздел про su), иначе attach не пройдёт." >&2
-fi
 
 TS=$(date +%Y%m%d-%H%M%S)
 RESULTS="scan-results-$TS.log"
@@ -102,11 +140,12 @@ echo "# scan $TS serial=$SERIAL delay=${DELAY}s total=$TOTAL" > "$RESULTS"
 echo "Результаты пишутся в $RESULTS"
 echo
 
-LIVE=0; MISSING=0; ERRORS=0
+LIVE=0; MISSING=0; ERRORS=0; CONSEC_ERRORS=0
 i=0
 while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   i=$((i + 1))
   [ "$i" -lt "$START" ] && continue
+  [ -n "$ONLY" ] && [ "$key" != "$ONLY" ] && continue
   pct=$((i * 100 / TOTAL))
   offer_disp="${offer:-<базовый>}"
 
@@ -140,12 +179,19 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   wait "$FRIDA_PID" 2>/dev/null
   FRIDA_PID=""
 
+  [ "$VERBOSE" -eq 1 ] && cat "$out_log"
+
   result=$(grep '\[probe\] RESULT' "$out_log" 2>/dev/null | tail -1)
   if [ -z "$result" ]; then
     status="error"; price=""; period=""
-    echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> error (нет ответа от probe, смотри $out_log)"
+    fail_log="scan-fail-$key.log"
+    cp "$out_log" "$fail_log" 2>/dev/null
+    echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> error (нет ответа от probe)"
+    echo "  Полный вывод frida сохранён в $fail_log, последние строки:"
+    tail -8 "$fail_log" 2>/dev/null | sed 's/^/    /'
   else
     status=$(echo "$result" | sed -n 's/.*status=\([^ ]*\).*/\1/p')
+    code=$(echo "$result" | sed -n 's/.*code=\([^ ]*\).*/\1/p')
     price=$(echo "$result" | sed -n 's/.*priceMicros=\([^ ]*\).*/\1/p')
     period=$(echo "$result" | sed -n 's/.*period=\([^ ]*\).*/\1/p')
     case "$status" in
@@ -153,18 +199,32 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
       missing) MISSING=$((MISSING + 1)) ;;
       *)       ERRORS=$((ERRORS + 1)) ;;
     esac
-    echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> $status${price:+ price=${price}micros}${period:+ period=$period}"
+    echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> $status${code:+ code=$code}${price:+ price=${price}micros}${period:+ period=$period}"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$sku" "$offer" "$status" "$price" "$period" >> "$RESULTS"
 
+  if [ "$status" = "error" ]; then
+    CONSEC_ERRORS=$((CONSEC_ERRORS + 1))
+    if [ "$CONSEC_ERRORS" -ge "$MAX_ERRORS" ]; then
+      echo
+      echo "СТОП: $CONSEC_ERRORS ошибок подряд — дальше гонять бессмысленно, дело не в офферах, а в окружении."
+      echo "Проверь по порядку: 1) frida-server от root (см. предупреждение выше), 2) module_521.apk на устройстве, 3) версии frida CLI и frida-server совпадают (frida --version; adb shell /data/local/tmp/frida-server --version)."
+      echo "Для отладки одного оффера: ./scan-offers.sh --one lite_base --verbose"
+      break
+    fi
+  else
+    CONSEC_ERRORS=0
+  fi
+
   # Задержка 5 секунд между офферами, после последнего — не нужна.
-  if [ "$i" -lt "$TOTAL" ]; then
+  # При --one оффер один, задержки нет.
+  if [ -z "$ONLY" ] && [ "$i" -lt "$TOTAL" ]; then
     sleep "$DELAY"
   fi
 done < "$OFFERS_FILE"
 
 echo
-echo "Готово: $TOTAL офферов. live=$LIVE missing=$MISSING error=$ERRORS"
+echo "Готово: live=$LIVE missing=$MISSING error=$ERRORS"
 echo "Итог в $RESULTS"
 echo "Живые офферы:"
 grep $'\tlive\t' "$RESULTS" || true
