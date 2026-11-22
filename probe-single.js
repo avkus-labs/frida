@@ -174,6 +174,12 @@ function boot() {
   b.setListener(hold(Lst.$new()));
   hold(Lst);
   try { b.enablePendingPurchases(); } catch (e) {}
+  // Как в frida.js (connectThen): второй вызов с PendingPurchasesParams.
+  // Раньше probe его не делал — единственное отличие от рабочего скрипта.
+  try {
+    var PPP = Java.use("com.android.billingclient.api.PendingPurchasesParams");
+    b.enablePendingPurchases(PPP.newBuilder().enableOneTimeProducts().build());
+  } catch (e2) {}
   clientRef = b.build();
   var SLL = Java.use("com.android.billingclient.api.BillingClientStateListener");
   var SL = Java.registerClass({

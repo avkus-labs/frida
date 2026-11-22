@@ -116,6 +116,19 @@ if command -v frida-ls-devices >/dev/null 2>&1; then
   fi
 fi
 
+# Версии frida CLI и frida-server должны совпадать. main.py сам следит
+# за этим и заменяет сервер при несовпадении, а этот скрипт — нет:
+# старый сервер + новый CLI дают молчаливый отказ attach, и каждый
+# оффер уходит в error без единой строки в логе.
+FRIDA_CLI_VER=$(frida --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+FRIDA_SRV_VER=$(adb -s "$SERIAL" shell /data/local/tmp/frida-server --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ -n "$FRIDA_CLI_VER" ] && [ -n "$FRIDA_SRV_VER" ] && [ "$FRIDA_CLI_VER" != "$FRIDA_SRV_VER" ]; then
+  echo "ВНИМАНИЕ: версии не совпадают: frida CLI $FRIDA_CLI_VER, frida-server на устройстве $FRIDA_SRV_VER. Attach может молча не проходить." >&2
+  echo "Запусти один раз main.py — он сам заменит сервер на совпадающий — и потом снова скан." >&2
+elif [ -n "$FRIDA_CLI_VER" ]; then
+  echo "frida CLI $FRIDA_CLI_VER, frida-server на устройстве ${FRIDA_SRV_VER:-не определился}"
+fi
+
 G1_PID=$(adb -s "$SERIAL" shell pidof "$PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}')
 if [ -z "$G1_PID" ]; then
   echo "Google One не запущен, запускаю..."
