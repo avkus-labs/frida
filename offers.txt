@@ -1,0 +1,109 @@
+lite_base	g1.30gb	
+lite_annual	g1.30gb.annual	
+lite_1m	g1.30gb.1month_eft	eft-1month
+lite_3m_85	g1.30gb.3months_ip_85p.acq	introprice
+basic_base	g1.100gb	
+basic_annual	g1.100gb.annual	
+basic_1m	g1.100gb.1month_eft	freetrial
+basic_3m	g1.100gb.3months_eft	freetrial
+basic_3m_85	g1.100gb.3months_ip_85p.acq	introprice
+std_base	g1.200gb	
+std_annual	g1.200gb.annual	
+std_1m	g1.200gb.1month_eft	freetrial
+std_3m	g1.200gb.3months_eft	freetrial
+std_3m_85	g1.200gb.3months_ip_85p.acq	introprice
+helium_base	g1.helium	
+helium_12m	g1.play.helium	eft-12mo
+helium_6m	g1.play.helium	eft-6mo
+helium_3m	g1.play.helium	eft-3mo
+helium_1m	g1.play.helium	eft-1mo
+helium_3m_75	g1.helium.3months_ip_75p.acq	introprice
+plus_2tb_base	g1.2tb	
+plus_2tb_annual	g1.2tb.annual	
+plus_2tb_1m	g1.2tb.1month_eft	freetrial
+plus_2tb_3m	g1.2tb.3months_eft	freetrial
+plus_2tb_6m	g1.2tb.6months_eft	freetrial
+plus_6m	g1.2tb.subs_variant	6months-eft
+plus_3m	g1.2tb.subs_variant	3months-eft
+plus_2tb_85	g1.2tb.3months_ip_85p.acq	introprice
+pro_5tb_base	g1.2tb.ai	
+pro_5tb_annual	g1.2tb.ai.annual	
+pro_5tb_alt_base	g1.5tb	
+pro_5tb_alt_annual	g1.5tb.annual	
+pro_12m	g1.2tb.ai.subs_variant	12months-eft
+pro_6m	g1.2tb.ai.subs_variant	6months-eft
+pro_6m_2	g1.2tb.ai.subs_variant	6months-eft-2
+pro_6m_ss	g1.2tb.ai.subs_variant	6months-eft-ss-2026
+pro_play_3m	g1.play.2tb.ai	eft-3mo
+pro_3m_75	g1.2tb.ai.3months_ip_75p.acq	introprice
+pro10_base	g1.10tb	
+pro10_annual	g1.10tb.annual	
+pro10_1m_90	g1.10tb.1month_ip_90p	introprice
+pro10_3m_85	g1.10tb.3months_ip_85p	introprice
+ultra5_base	g1.20tb	
+ultra5_base_v2	g1.20tb.v2	
+ultra5_play_base	g1.play.20tb	
+ultra5x_12m	g1.play.20tb	eft-12month
+ultra5x_6m	g1.play.20tb	eft-6month
+ultra5x_3m	g1.play.20tb	eft-3month
+ultra5x_1m	g1.play.20tb	eft-1month
+ultra20_3m_90	g1.20tb.3months_ip_90p.acq	introprice
+ultra20_3m_80	g1.20tb.3months_ip_80p.acq	introprice
+ultra20_3m_75	g1.20tb.3months_ip_75p.acq	introprice
+ultra30_base	g1.30tb	
+ultra20_base	g1.ai.pro	
+ultra20_play_base	g1.play.ai.pro	
+ultra20x_12m	g1.play.ai.pro	eft-12mo
+ultra20x_6m	g1.play.ai.pro	eft-6mo
+ultra20x_3m	g1.play.ai.pro	eft-3mo
+ultra20x_1m	g1.play.ai.pro	eft-1mo
+ultra_1m_90	g1.ai.ultra.1month_ip_90p.acq	introprice
+ultra_3m_90	g1.ai.ultra.3months_ip_90p.acq	introprice
+ultra_3m_80	g1.ai.ultra.3months_ip_80p.acq	introprice
+ultra_1m_75	g1.ai.ultra.1month_ip_75p.acq	introprice
+ultra_3m_75	g1.ai.ultra.3months_ip_75p.acq	introprice
+yt_1m	g1.youtube_premium_individual_add_on	eft-1mo
+yt_family	g1.youtube_premium_family_add_on	eft-1mo
+yt_lite	g1.youtube_premium_lite_add_on	eft-1mo
+cand_2tb_12m	g1.2tb.12months_eft	freetrial
+cand_20tb_1m	g1.20tb.1month_eft	freetrial
+cand_20tb_12m	g1.20tb.12months_eft	freetrial
+cand_30tb_1m	g1.30tb.1month_eft	freetrial
+cand_30tb_12m	g1.30tb.12months_eft	freetrial
+cand_ai	g1.ai	
+cand_ai_plus	g1.ai.plus	
+cand_ai_ultra	g1.ai.ultra	
+cand_5tb_ai	g1.5tb.ai	
+cand_20tb_ai	g1.20tb.ai	
+cand_30tb_ai	g1.30tb.ai	
+cand_5tb_ai_subs	g1.5tb.ai.subs_variant	
+cand_20tb_ai_subs	g1.20tb.ai.subs_variant	
+cand_30tb_ai_subs	g1.30tb.ai.subs_variant	
+cand_play	g1.play	
+cand_play_ai	g1.play.ai	
+cand_play_2tb	g1.play.2tb	
+cand_play_5tb	g1.play.5tb	
+cand_play_30tb	g1.play.30tb	
+cand_play_ai_plus	g1.play.ai.plus	
+cand_play_ai_ultra	g1.play.ai.ultra	
+cand_play_pro	g1.play.pro	
+cand_play_plus	g1.play.plus	
+cand_play_20tb_12m	g1.play.20tb.12month	
+cand_play_ai_pro_12m	g1.play.ai.pro.12month	
+cand_play_30tb_12m	g1.play.30tb.12month	
+cand_play_5tb_12m	g1.play.5tb.12month	
+cand_5tb_3m_75	g1.5tb.3months_ip_75p.acq	introprice
+cand_100gb_3m_83	g1.100gb.3months_ip_83p.acq	introprice
+cand_200gb_3m_83	g1.200gb.3months_ip_83p.acq	introprice
+cand_30gb_3m_83	g1.30gb.3months_ip_83p.acq	introprice
+cand_helium_3m_83	g1.helium.3months_ip_83p.acq	introprice
+cand_home	g1.home_premium	
+cand_health	g1.health_premium	
+cand_play_home	g1.play.home	
+cand_play_health	g1.play.health	
+cand_ultra	g1.ultra	
+cand_ultra_20tb	g1.ultra.20tb	
+cand_ultra_30tb	g1.ultra.30tb	
+cand_pro	g1.pro	
+cand_plus	g1.plus	
+cand_premium	g1.premium	

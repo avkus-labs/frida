@@ -81,6 +81,17 @@ frida -U -p <pid Google One> -l probe-one.js --no-pause
 
 Нажми Upgrade в Google One и смотри строки `[probe] offer product=... offerId=...`. Полный токен в лог не пишется, только первые 12 символов — так спокойнее.
 
+А если прогнать весь список разом — есть `scan-offers.sh`. Он берёт все 109 офферов из `offers.txt`, по одному подставляет их в `probe-single.js` и спрашивает у Play только через `queryProductDetailsAsync`, с задержкой 5 секунд между офферами и прогрессом в терминале (`[12/109] ... -> live/missing/error`). Экран оформления не открывается и ничего не покупается — это анализ, а не оформление. Итог — в `scan-results-<дата>.log`.
+
+```bash
+./scan-offers.sh                          # все 109, задержка 5 секунд
+./scan-offers.sh --serial emulator-5554   # явно выбрать устройство
+./scan-offers.sh --start 40               # продолжить с 40-го оффера
+./scan-offers.sh --dry-run                # только показать список, ничего не запускать
+```
+
+Важно: не гоняй в цикле `main.py --plan` — он открывает экран оформления (`launchBillingFlow`), и каждый такой вызов может сжечь право на триал, даже без нажатия «Подписаться». Для перебора — только `scan-offers.sh`.
+
 ## Что скрипт делает автоматически
 
 1. Ищет ADB в `PATH`, Android SDK и каталоге установки MuMu.
@@ -97,6 +108,9 @@ frida -U -p <pid Google One> -l probe-one.js --no-pause
 | `main.py` | Точка входа. Подготавливает окружение, выводит меню и загружает скрипт в процесс приложения |
 | `frida.js` | Скрипт Frida с таблицей тарифов и кодом для работы с BillingClient |
 | `probe-one.js` | Отдельный логгер: ловит живые sku/offer из BillingClient, ничего не покупает |
+| `scan-offers.sh` | Прогоняет все 109 офферов из `offers.txt` по одному (5 секунд между ними), только чтение, итог в `scan-results-<дата>.log` |
+| `probe-single.js` | Шаблон для одного оффера: `queryProductDetailsAsync` для одного sku, без `launchBillingFlow` |
+| `offers.txt` | Список всех офферов: ключ, sku, offer — сгенерирован из `frida.js` |
 | `module_b64.py` | DEX-модуль BillingClient 5.2.1 в кодировке Base64 |
 | `requirements.txt` | Зависимости Python |
 | `assets/` | Локальный кеш файлов `frida-server` |
