@@ -26,11 +26,19 @@ var PLANS = {
   ultra20_3m_90: { sku: "g1.20tb.3months_ip_90p.acq",   offer: "introprice", note: "$9.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
   ultra20_3m_80: { sku: "g1.20tb.3months_ip_80p.acq",   offer: "introprice", note: "$19.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
   ultra20_3m_75: { sku: "g1.20tb.3months_ip_75p.acq",   offer: "introprice", note: "$24.99 Ultra 5x (20 ТБ) 3 месяца, затем $99.99/мес." },
+  ultra5x_12m:   { sku: "g1.play.20tb", offer: "eft-12month", note: "Ultra 5x (20 ТБ) 12 месяцев бесплатно, затем $99.99/мес." },
+  ultra5x_6m:    { sku: "g1.play.20tb", offer: "eft-6month",  note: "Ultra 5x (20 ТБ) 6 месяцев бесплатно, затем $99.99/мес." },
+  ultra5x_3m:    { sku: "g1.play.20tb", offer: "eft-3month",  note: "Ultra 5x (20 ТБ) 3 месяца бесплатно, затем $99.99/мес." },
+  ultra5x_1m:    { sku: "g1.play.20tb", offer: "eft-1month",  note: "Ultra 5x (20 ТБ) 1 месяц бесплатно, затем $99.99/мес." },
   ultra_1m_90:   { sku: "g1.ai.ultra.1month_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x (30 ТБ) 1 месяц, затем $199.99/мес." },
   ultra_3m_90:   { sku: "g1.ai.ultra.3months_ip_90p.acq", offer: "introprice", note: "$19.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." },
   ultra_3m_80:   { sku: "g1.ai.ultra.3months_ip_80p.acq", offer: "introprice", note: "$39.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." },
   ultra_1m_75:   { sku: "g1.ai.ultra.1month_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x (30 ТБ) 1 месяц, затем $199.99/мес." },
-  ultra_3m_75:   { sku: "g1.ai.ultra.3months_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." }
+  ultra_3m_75:   { sku: "g1.ai.ultra.3months_ip_75p.acq", offer: "introprice", note: "$49.99 Ultra 20x (30 ТБ) 3 месяца, затем $199.99/мес." },
+  ultra20x_12m:  { sku: "g1.play.ai.pro", offer: "eft-12mo", note: "Ultra 20x (30 ТБ) 12 месяцев бесплатно, затем $199.99/мес." },
+  ultra20x_6m:   { sku: "g1.play.ai.pro", offer: "eft-6mo",  note: "Ultra 20x (30 ТБ) 6 месяцев бесплатно, затем $199.99/мес." },
+  ultra20x_3m:   { sku: "g1.play.ai.pro", offer: "eft-3mo",  note: "Ultra 20x (30 ТБ) 3 месяца бесплатно, затем $199.99/мес." },
+  ultra20x_1m:   { sku: "g1.play.ai.pro", offer: "eft-1mo",  note: "Ultra 20x (30 ТБ) 1 месяц бесплатно, затем $199.99/мес." }
 };
 
 var STACK_MODE = 5; // Для продления используется CHARGE_FULL_PRICE
