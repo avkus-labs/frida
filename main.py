@@ -338,8 +338,11 @@ def host_frida_version():
     exe = shutil.which("frida")
     if not exe:
         return ""
-    r = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return (r.stdout or r.stderr or "").strip().split()[0]
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return ((r.stdout or r.stderr or "").strip().split() or [""])[0]
+    except OSError:
+        return ""
 
 
 def ensure_host_frida():
