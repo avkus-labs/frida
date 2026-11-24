@@ -24,6 +24,7 @@ import argparse
 import getpass
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -150,15 +151,9 @@ class Adb:
 # ── ввод текста через adb ────────────────────────────────────────────────────
 
 def adb_input_text(adb, text):
-    """Отправляет текст в активное поле: пробелы → %s, экранирование для shell устройства."""
-    escaped = (
-        text.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("$", "\\$")
-        .replace("`", "\\`")
-        .replace(" ", "%s")
-    )
-    adb.shell("input", "text", f'"{escaped}"')
+    """Отправляет текст в активное поле: пробелы → %s, безопасное экранирование для sh."""
+    escaped = shlex.quote(text.replace(" ", "%s"))
+    adb.shell("input", "text", escaped)
 
 
 def press_enter(adb):
@@ -411,14 +406,29 @@ def main():
     if not adb.connect():
         return 1
 
-    # Root: main.py требует su, поэтому предупреждаем заранее.
-    if "uid=0" not in adb.shell("su", "-c", "id"):
-        warn("На устройстве нет root (su -c id не даёт uid=0). Запустите setup.py — иначе main.py не сработает.")
+    # Root: проверяем adb root (id → uid=0) или su.
+    def _has_root_now():
+        if "uid=0" in adb.shell("id"):
+            return "adb root"
+        if "uid=0" in (adb.shell("su", "-c", "id") + adb.shell("su", "0", "id")):
+            return "su"
+        return ""
+
+    root_via = _has_root_now()
+    if not root_via:
+        info("Пробую включить root (adb root)…")
+        adb.out("root")
+        import time as _time
+        _time.sleep(1.5)
+        adb.connect()
+        root_via = _has_root_now()
+    if not root_via:
+        warn("На устройстве нет root (ни adb root, ни su не дают uid=0).")
         cont = input("Продолжить без root? (да/нет): ").strip().lower()
         if cont not in ("да", "д", "y", "yes"):
             return 1
     else:
-        ok("Root доступен (su -c id → uid=0)")
+        ok(f"Root доступен ({root_via} → uid=0)")
 
     # Аккаунт.
     if not choose_account(adb, prefill_email=args.email):

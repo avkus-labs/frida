@@ -110,6 +110,7 @@ def find_adb_exe():
             extras.append(str(Path(root) / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")))
     extras += [
         os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
+        r"C:\platform-tools\adb.exe",
         r"C:\Android\sdk\platform-tools\adb.exe",
         r"D:\SDK\platform-tools\adb.exe",
         r"E:\SDK\platform-tools\adb.exe",
@@ -200,7 +201,7 @@ class Adb:
         old = self.serial
         self.serial = serial
         try:
-            if "uid=0" in (self.shell("su", "-c", "id") + self.shell("su", "0", "id")):
+            if "uid=0" in (self.shell("id") + self.shell("su", "-c", "id") + self.shell("su", "0", "id")):
                 score += 10
             if "package:" in self.shell("pm", "path", PKG):
                 score += 5
@@ -367,7 +368,13 @@ def device_abi():
     return abi.splitlines()[0].strip() if abi else ""
 
 
+def shell_is_root():
+    return "uid=0" in adb.shell("id")
+
+
 def has_root():
+    if shell_is_root():
+        return True
     out = adb.shell("su", "-c", "id")
     if "uid=0" in out:
         return True
@@ -385,6 +392,9 @@ def google_accounts():
 
 
 def su_sh(cmd):
+    if shell_is_root():
+        r = adb.run(["shell", "sh", "-c", cmd])
+        return ((r.stdout or "") + (r.stderr or "")).strip()
     r = adb.run(["shell", "su", "-c", cmd])
     text = ((r.stdout or "") + (r.stderr or "")).strip()
     bad = r.returncode != 0 or "inaccessible" in text or "not found" in text.lower()
@@ -484,13 +494,17 @@ def remote_frida_version():
 
 def start_remote_frida():
     su_sh(f"chmod 755 {FRIDA_REMOTE}")
-    adb.run(["shell", "su", "-c", "killall -9 frida-server"])
+    su_sh("killall -9 frida-server")
     time.sleep(0.5)
-    adb.run(["shell", "su", "-c", f"chmod 755 {FRIDA_REMOTE}; {FRIDA_REMOTE} -D &"])
+    if shell_is_root():
+        adb._cmd(["shell", f"chmod 755 {FRIDA_REMOTE} && {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
+        time.sleep(1.5)
+        return (adb.shell("pidof", "frida-server") or "").strip()
+    adb._cmd(["shell", "su", "-c", f"chmod 755 {FRIDA_REMOTE}; {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
     time.sleep(1.5)
     running = (adb.shell("pidof", "frida-server") or "").strip()
     if not running:
-        adb.run(["shell", "su", "0", "sh", "-c", f"{FRIDA_REMOTE} -D &"])
+        adb._cmd(["shell", "su", "0", "sh", "-c", f"{FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
         time.sleep(1.5)
         running = (adb.shell("pidof", "frida-server") or "").strip()
     return running
@@ -526,7 +540,7 @@ def ensure_frida_server(ver):
         sys.exit(1)
 
     if running:
-        adb.run(["shell", "su", "-c", "killall -9 frida-server"])
+        su_sh("killall -9 frida-server")
         time.sleep(0.5)
 
     info(f"push {local.name} ({ver}) -> {FRIDA_REMOTE}")
@@ -563,7 +577,19 @@ def ensure_root():
     if has_root():
         ok("На устройстве доступен root")
         return
-    fail("На устройстве нет root-доступа: проверка su не прошла.")
+    info("Пробую включить root (adb root)…")
+    r = adb.run(["root"])
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if out:
+        info(f"adb root: {out}")
+    time.sleep(1.5)
+    if adb.serial and ":" in adb.serial and adb.serial not in adb.devices():
+        adb.run(["connect", adb.serial], serial="")
+        time.sleep(0.8)
+    if has_root():
+        ok("На устройстве доступен root (adb root)")
+        return
+    fail("На устройстве нет root-доступа: ни adb root, ни su не дали uid=0.")
     sys.exit(1)
 
 
@@ -697,10 +723,14 @@ class Session:
         self.ready.clear()
         mgr = frida.get_device_manager()
         dev = None
-        for d in mgr.enumerate_devices():
-            if d.id == adb.serial:
-                dev = d
+        for _ in range(6):
+            for d in mgr.enumerate_devices():
+                if d.id == adb.serial:
+                    dev = d
+                    break
+            if dev is not None:
                 break
+            time.sleep(0.5)
         if dev is None:
             dev = frida.get_usb_device(timeout=8)
         self.device = dev

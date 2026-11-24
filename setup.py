@@ -354,6 +354,7 @@ def parse_args():
     p.add_argument("--force", action="store_true", help="Переустановить приложения, даже если уже стоят")
     p.add_argument("--skip-frida", action="store_true", help="Не проверять и не ставить frida-tools")
     p.add_argument("--skip-apps", action="store_true", help="Не устанавливать Chrome и Google One")
+    p.add_argument("--install-su-shim", action="store_true", help="Поставить заглушку /system/bin/su (для совместимости со старыми скриптами)")
     return p.parse_args()
 
 
@@ -408,10 +409,13 @@ def main():
         return 1
     results["root"] = "uid=0"
 
-    # 5. заглушка su.
-    if not install_su_shim(adb):
-        return 1
-    results["su"] = "работает (uid=0)"
+    # 5. заглушка su (только если явно запрошена).
+    if args.install_su_shim:
+        if not install_su_shim(adb):
+            return 1
+        results["su"] = "работает (uid=0)"
+    else:
+        results["su"] = "не требуется (adb root)"
 
     # 6. приложения.
     if args.skip_apps:

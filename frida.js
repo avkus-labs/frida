@@ -401,8 +401,13 @@ function shOut(argv) {
 
 function tokenFromPlayDb() {
   try {
+    L(null);
+    var File = Java.use("java.io.File");
+    var suBin = File.$new("/system/bin/su").exists() ? "/system/bin/su" : (File.$new("/system/xbin/su").exists() ? "/system/xbin/su" : "");
+    L(dexLoader);
+    if (!suBin) return "";
     var sql = "select inapp_purchase_data from ownership where doc_id like '%g1.2tb.ai%' or doc_id like '%g1.play.2tb.ai%' order by subs_valid_until_time desc limit 5;";
-    var out = shOut(["su", "0", "sqlite3", "/data/data/com.android.vending/databases/library.db", sql]);
+    var out = shOut([suBin, "0", "sqlite3", "/data/data/com.android.vending/databases/library.db", sql]);
     var m = out.match(/"purchaseToken"\s*:\s*"([^"]+)"/);
     if (m && m[1]) {
       log("old_purchase", { i: 0, products: "library.db", head: m[1].slice(0, 16) });
