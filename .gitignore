@@ -1,3 +1,15 @@
 frida-server-17.9.1-android-x86_64
 scan-results-*.log
 scan-fail-*.log
+# строки для .gitignore репозитория frida
+# state/ — последний отправленный в Cloudflare IP (локальное состояние update_dns.py)
+state/
+# downloads/ — кеш скачанных APK (Chrome, Google One)
+downloads/
+# .env — локальные секреты
+.env
+# config.py — настоящий конфиг с доменом, ID зоны и ссылками (не коммитить!)
+config.py
+__pycache__/
+*.pyc
+*.log
