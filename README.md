@@ -38,7 +38,7 @@ python main.py --serial emulator-5560    # Явно выбрать устрой�
 
 Полный каталог всех тарифов — [SKU-LIST.ru.md](SKU-LIST.ru.md): 109 записей, 94 уникальных SKU, таблицы по тарифам, отдельный список бесплатных и списки для копирования. Сгенерирован из `frida.js`, так что со скриптом не расходится.
 
-## Главный затык: su, или почему frida-server опять не root
+## Главный затык: root, или почему frida-server опять не root
 
 Вот это мы забывали раз за разом, поэтому пишу большими буквами.
 
@@ -47,18 +47,19 @@ python main.py --serial emulator-5560    # Явно выбрать устрой�
 Правильный порядок такой, и никак иначе:
 
 1. Запусти `main.py` первый раз. Он упадёт с `PermissionDeniedError`. Это нормально, не паникуй.
-2. Убей его сервер и запусти от root:
+2. Переведи adbd в root и запусти сервер от root (сборка userdebug — `su` не нужен):
    ```bash
-   adb -s emulator-5554 shell su -c 'killall -9 frida-server'
-   adb -s emulator-5554 shell su -c '/data/local/tmp/frida-server -D &'
-   adb -s emulator-5554 shell ps -A | grep frida-server
+   adb -s <serial> root
+   adb -s <serial> shell 'killall -9 frida-server'
+   adb -s <serial> shell '/data/local/tmp/frida-server -D &'
+   adb -s <serial> shell ps -A | grep frida-server
    ```
    В первой колонке должно быть `root`, а не `shell`.
 3. Запусти `main.py` второй раз, с тем же планом. Второй раз он увидит, что сервер уже запущен от root, и не будет его перезапускать — attach пройдёт.
 
 Проверка до запуска не помогает: `main.py` всё равно запустит свой, shell. Только так, в два захода.
 
-И да, `adb shell su -c id` должен дать `uid=0(root)`. Если даёт `Permission denied`, иди в Magisk → Superuser → Shell → Grant, и успей нажать Grant за 10 секунд.
+Проверка: после `adb root` команда `adb shell id` должна дать `uid=0(root)`. Если `adb root` отвечает `adbd cannot run as root in production builds` — сборка не userdebug, это не наш случай (Bliss 15.9.2 — userdebug).
 
 ## Новая подписка и продление
 
@@ -92,7 +93,7 @@ frida -U -p <pid Google One> -l probe-one.js --no-pause
 
 Важно: не гоняй в цикле `main.py --plan` — он открывает экран оформления (`launchBillingFlow`), и каждый такой вызов может сжечь право на триал, даже без нажатия «Подписаться». Для перебора — только `scan-offers.sh`.
 
-Если офферы идут в `error` — дело не в офферах, а в окружении, скрипт сам остановится после 5 ошибок подряд. Проверяй по порядку: `frida-server` запущен от root (а не как shell — это главный затык, см. раздел про su), на устройстве есть `/data/local/tmp/module_521.apk`, версии frida CLI и frida-server совпадают. Для отладки одного оффера: `./scan-offers.sh --one lite_base --verbose` — весь вывод frida будет на экране, а при ошибке ещё и в `scan-fail-lite_base.log`.
+Если офферы идут в `error` — дело не в офферах, а в окружении, скрипт сам остановится после 5 ошибок подряд. Проверяй по порядку: `frida-server` запущен от root (а не как shell — это главный затык, см. раздел про root), на устройстве есть `/data/local/tmp/module_521.apk`, версии frida CLI и frida-server совпадают. Для отладки одного оффера: `./scan-offers.sh --one lite_base --verbose` — весь вывод frida будет на экране, а при ошибке ещё и в `scan-fail-lite_base.log`.
 
 ## Что скрипт делает автоматически
 
@@ -101,7 +102,7 @@ frida -U -p <pid Google One> -l probe-one.js --no-pause
 3. Если одно устройство обнаружено несколько раз, объединяет записи. При выборе отдаёт предпочтение устройству с root-доступом, установленным Google One и выполненным входом в аккаунт Google.
 4. Если на компьютере отсутствует Frida, устанавливает `frida-tools` через pip.
 5. Если на устройстве отсутствует `/data/local/tmp/module_521.apk`, декодирует модуль из `module_b64.py` и копирует его через ADB.
-6. Если на устройстве отсутствует `frida-server` или его версия отличается от версии Frida на компьютере, берёт сервер из `assets/` либо загружает с GitHub, затем запускает его на устройстве. Помни про затык с su выше — этот шаг как раз про него.
+6. Если на устройстве отсутствует `frida-server` или его версия отличается от версии Frida на компьютере, берёт сервер из `assets/` либо загружает с GitHub, затем запускает его на устройстве. Помни про затык с root выше — этот шаг как раз про него.
 
 ## Файлы проекта
 

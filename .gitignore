@@ -13,3 +13,7 @@ config.py
 __pycache__/
 *.pyc
 *.log
+
+# распакованные frida-server (>100 МБ) — не коммитить, иначе GH001 при push
+assets/frida-server-*
+frida-server-*
