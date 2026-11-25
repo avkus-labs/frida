@@ -32,3 +32,16 @@ GOOGLE_ONE_APK_URL = ""
 
 # Папка кеша скачанных APK (относительно папки скриптов).
 DOWNLOADS_DIR = "downloads"
+# VNC-пароль для vm_watch.py (virsh пароль не отдаёт, поэтому он
+# берётся только отсюда; если пусто — в сообщении будет пометка).
+# Переменная окружения VNC_PASSWORD имеет приоритет над значением здесь.
+VNC_PASSWORD = ""
+
+# Telegram (уведомление update_dns.py при смене IP).
+# Переменные окружения TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID имеют приоритет
+# над значениями здесь. Chat ID личного чата = ID пользователя.
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+# Вторая запись (SSH, та же зона). Необязательно.
+CF_DNS_RECORD_ID_SSH = ""
+CF_RECORD_NAME_SSH = "debian-nested.avkus.bond"

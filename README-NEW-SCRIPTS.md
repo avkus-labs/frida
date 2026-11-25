@@ -132,6 +132,132 @@ python update_dns.py
 */5 * * * * CF_API_TOKEN="..." /usr/bin/python3 /home/gru_avkus/frida/update_dns.py >> /var/log/update_dns.log 2>&1
 ```
 
+### Развёрнуто на debian-nested (live, 2026-11-25)
+
+Автообновление эфемерного IP работает. Домен — реальный, не пример:
+
+- Записи (обе тип A, DNS-only, proxied=false, TTL auto):
+  - ADB: `adb.avkus.bond`, Record ID `af2f9579ed8155694038657b813c0ea8`
+  - SSH: `debian-nested.avkus.bond`, Record ID `957df734f2628270f68092daf2dafd33`
+- Зона: `avkus.bond`, Zone ID `bc227290b895883d4d95fcf466b42953`
+- SSH-запись — точка входа по домену (порт 2222, нестандартный):
+  `ssh -p 2222 dave@debian-nested.avkus.bond`. Имя `ssh.avkus.bond` занято
+  (CNAME на Cloudflare Tunnel), поэтому взяли `debian-nested.avkus.bond`.
+- Токен Cloudflare лежит в `config.py` (600, в .gitignore), а не в окружении
+  cron-задачи — в отличие от примера выше.
+
+Как получали Zone ID и Record ID (токен уже был в `config.py`):
+1. `GET /client/v4/zones` — список зон, нашли `avkus.bond` и его Zone ID.
+2. `GET /zones/{zone_id}/dns_records?name=adb.avkus.bond` — запись уже
+   существовала (создал Андрей), взяли её Record ID и текущий content
+   (тогда был старый IP 34.122.243.84).
+3. Вписали Zone ID, Record ID, `CF_RECORD_NAME=adb.avkus.bond` и
+   `ADB_SERIAL=adb.avkus.bond:5555` в `config.py`.
+
+Развёртывание:
+- Симлинк: `/home/avkuska/bin/update_dns.py` -> `/home/avkuska/frida/update_dns.py`
+  (скрипт через `Path(__file__).resolve()` находит `config.py` и `state/`
+  в репозитории, поэтому симлинк работает).
+- Cron (пользователь avkuska, каждые 5 минут):
+```
+*/5 * * * * /home/avkuska/bin/update_dns.py >> /home/avkuska/frida/update_dns.log 2>&1
+```
+- Лог: `/home/avkuska/frida/update_dns.log`, state: `state/dns_last_ip.txt`.
+
+Ручной тест 2026-11-25: пройден. Скрипт определил IP 34.27.239.29
+(через GCP metadata), обновил `adb.avkus.bond` с 34.122.243.84 на
+34.27.239.29, записал IP в state-файл. Проверка через API подтвердила:
+запись указывает на 34.27.239.29.
+
+Боевой тест 2026-11-25: пройден. Сервер выключили и включили, новый IP
+34.136.139.241; cron сам обновил `adb.avkus.bond` на новый IP без ручных
+действий (в логе: определил 34.136.139.241 против 34.27.239.29 в state →
+PUT → state записан).
+
+Вторая запись (SSH) 2026-11-25: `update_dns.py` расширен на две записи
+(основная + `CF_DNS_RECORD_ID_SSH` / `CF_RECORD_NAME_SSH` из config.py;
+та же зона). Проверка `--force`: обновил обе записи на 34.136.139.241,
+API подтвердил обе DNS-only.
+
+
+Telegram-хук в update_dns.py 2026-11-25: после успешной смены IP
+скрипт шлёт одно сообщение в Telegram (Bot API sendMessage):
+`IP debian-nested обновлён на <новый IP>` + имена обновлённых записей.
+Токен и chat_id — TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID из env или
+config.py (Андрей заполнил сам). Если IP не изменился — ничего не шлётся.
+Неудача отправки НЕ отменяет обновление DNS (предупреждение в лог).
+ПРОБЛЕМА 2026-11-25: тест `--force` — DNS обновился, а Telegram ответил
+`Unauthorized` (401): токен бота в config.py не принимается API.
+Хук работает, нужен рабочий токен (от @BotFather) в config.py.
+
+## Сторож KVM: vm_watch.py (live, 2026-11-25)
+
+Отдельный скрипт, тоже лежит во frida. Каждые 5 минут спрашивает
+у libvirt (`virsh -c qemu:///system`), какие VM запущены, какие у них
+внутренние IP и VNC/SPICE-порты, и сравнивает со снимком в
+`state/vm_state.json`. Telegram — ТОЛЬКО если что-то изменилось:
+VM включилась/выключилась, IP переназначился, VNC-порт поменялся,
+внешний IP хоста сменился. Сообщение: текущее состояние всех машин
++ список изменений.
+
+- Симлинк: `/home/avkuska/bin/vm_watch.py` -> `/home/avkuska/frida/vm_watch.py`
+- Cron (пользователь avkuska, каждые 5 минут):
+```
+*/5 * * * * /home/avkuska/bin/vm_watch.py >> /home/avkuska/frida/vm_watch.log 2>&1
+```
+- Лог: `/home/avkuska/frida/vm_watch.log`, state: `state/vm_state.json`.
+- IP берётся из `virsh domifaddr`, запасной источник — DHCP-аренды
+  `/var/lib/libvirt/dnsmasq/virbr0.status` (по MAC из dumpxml).
+- VNC-порт: у запущенной VM — из `virsh vncdisplay` (:N = 5900+N),
+  у выключенной — из dumpxml (port='-1' = autoport, назначится при старте).
+- VNC-пароль: **virsh его НЕ отдаёт** (в XML его нет — пароль только
+  записывается через QMP, не читается). Если пароль нужен в сообщении —
+  задайте `VNC_PASSWORD` в config.py (ключ уже есть в config.example.py).
+- Работает от avkuska без sudo: avkuska в группе libvirt, но virsh
+  по умолчанию ходит в qemu:///session (пусто) — скрипт явно указывает
+  `-c qemu:///system`.
+- Первый запуск: пишет начальный снимок и шлёт его в Telegram как
+  «начальное состояние». Дальше — только изменения.
+- Тест 2026-11-25: `--dry-run` показал корректный снимок (bliss-01
+  running 10.166.0.128 VNC 5902; win11 running, IP не виден, SPICE 5900;
+  bliss-02/blisstemplate shut off). Второй запуск — «Без изменений,
+  Telegram не трогаем». Telegram не дошёл из-за того же `Unauthorized`
+  (токен, см. выше) — снимок при этом записался.
+
+
+DNAT убит 2026-11-25: прямой путь ADB снаружи (adb.avkus.bond:5555 →
+DNAT → 10.166.0.129:5555) больше не используется. Удалёны оба правила
+DNAT (5555 → .129 и 3389 → .128, оба указывали на несуществующие /
+не те машины) и оба FORWARD ACCEPT, правила сохранены через
+netfilter-persistent. Теперь только SSH-туннели (см. tunnel.py).
+Правило GCP allow-adb-5555 осталось, но никуда не ведёт (на хосте
+на 5555 ничего не слушает без DNAT) — можно закрыть.
+
+## SSH-туннель к VM: tunnel.py (live, 2026-11-25)
+
+Простой скрипт, запускается на твоём компьютере (Windows/macOS/Linux)
+и держит окно туннеля. Сам спрашивает у хоста, какие VM запущены
+(vm_watch.py --inventory по SSH), и динамически строит пробросы:
+на каждую запущенную VM — свой локальный порт ADB и свой VNC.
+Одна VM — одна пара портов, две — две, три — три.
+
+  python3 tunnel.py              # поднять туннель (ssh на переднем плане)
+  python3 tunnel.py --dry-run    # только показать пробросы и команду
+
+Порты (локальные): ADB 15551, 15552, ...; VNC 15901, 15902, ...
+(по порядку имён VM). Пример для bliss-01:
+  adb connect 127.0.0.1:15551
+  VNC-клиент → 127.0.0.1:15901
+ADB идёт на внутренний IP VM (:5555), VNC — на порт хоста
+(у bliss-01 это 5902). Опции: --host/--port/--user, --adb-base,
+--vnc-base, --no-adb/--no-vnc, --ssh (путь к ssh), --ssh-opts
+(доп. опции одной строкой, например -F путь-к-конфигу).
+
+Тест 2026-11-25: --dry-run показал bliss-01 → ADB 15551 + VNC 15901.
+Живой туннель поднят, проверено: `adb connect 127.0.0.1:15551` →
+device, boot_completed=1, модель Generic Android-x86_64; TCP до
+VNC 15901 доходит. Туннель закрыт после теста.
+
 ## Запуск на debian-nested по SSH
 
 Скрипты можно запускать прямо на хосте — репозиторий клонируется и туда.
@@ -158,4 +284,7 @@ python3 interactive.py --serial 10.166.0.129:5555
   на время работы — это приемлемо. Если понадобится держать включённым
   постоянно — закрыть порт и ходить через Cloudflare Tunnel.
 - **Scrcpy не работает** в этой сборке (сломан видео-энкодер, `err=-38`).
-  Экран — только через VNC (порт 5901).
+  Экран — только через VNC (порт 5901). Перепроверено 2026-11-25 на
+  клоне bliss-01: `adb shell screenrecord` → `Encoder failed (err=-38)`,
+  тот же энкодер, что и у исходной VM. ADB при этом работает (connect,
+  shell, boot_completed=1).

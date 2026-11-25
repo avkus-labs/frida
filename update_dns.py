@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-update_dns.py — динамический DNS для ADB-домена через Cloudflare API.
+update_dns.py — динамический DNS для доменов debian-nested через Cloudflare API.
 
 Что делает:
   1. Узнаёт текущий внешний IP хоста: сначала GCP metadata server,
@@ -9,9 +9,21 @@ update_dns.py — динамический DNS для ADB-домена чере�
   2. Читает последний отправленный IP из state-файла (по умолчанию
      state/dns_last_ip.txt рядом со скриптом).
   3. Если IP не изменился — ничего не делает и НЕ дергает API Cloudflare.
-  4. Если изменился — обновляет A-запись через Cloudflare API
+  4. Если изменился — обновляет A-записи через Cloudflare API
      (PUT /zones/{zone_id}/dns_records/{record_id}) и только при успехе
      записывает новый IP в state-файл.
+
+Обновляет две записи (обе DNS-only, без прокси):
+  - ADB:  CF_RECORD_NAME (например adb.avkus.bond)
+  - SSH:  CF_RECORD_NAME_SSH (например debian-nested.avkus.bond)
+Вторая запись необязательна: если CF_DNS_RECORD_ID_SSH / CF_RECORD_NAME_SSH
+не заданы, обновляется только первая.
+
+Telegram-хук: после успешной смены IP отправляет одно сообщение
+в Telegram (Bot API sendMessage). Токен и chat_id берутся из
+переменных окружения TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID или из
+config.py. Если Telegram не настроен — просто пропускается.
+Неудача отправки НЕ отменяет обновление DNS.
 
 Токен берётся из переменной окружения CF_API_TOKEN (или из config.py).
 Настоящий токен никогда не кладётся в репозиторий.
@@ -42,6 +54,12 @@ DEFAULT_CONFIG = {
     "CF_ZONE_ID": "",
     "CF_DNS_RECORD_ID": "",
     "CF_RECORD_NAME": "adb.example.com",
+    # Вторая запись (SSH, та же зона). Необязательно.
+    "CF_DNS_RECORD_ID_SSH": "",
+    "CF_RECORD_NAME_SSH": "",
+    # Telegram (уведомление при смене IP). Необязательно.
+    "TELEGRAM_BOT_TOKEN": "",
+    "TELEGRAM_CHAT_ID": "",
 }
 
 
@@ -183,6 +201,38 @@ def cf_update_record(token, zone_id, record_id, record_name, ip):
     return False, detail
 
 
+# ── Telegram ─────────────────────────────────────────────────────────────────
+
+def tg_notify(token, chat_id, text):
+    """Отправляет одно сообщение в Telegram. Возвращает True при успехе."""
+    if not token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            warn(f"Telegram: HTTP {e.code}")
+            return False
+        warn(f"Telegram не принял сообщение: {data.get('description') or f'HTTP {e.code}'}")
+        return False
+    except Exception as e:
+        warn(f"Telegram недоступен: {e}")
+        return False
+    if data.get("ok"):
+        return True
+    warn(f"Telegram вернул ok=false: {data.get('description') or data}")
+    return False
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def parse_args():
@@ -207,6 +257,12 @@ def main():
     zone_id = args.zone_id or os.environ.get("CF_ZONE_ID") or cfg.get("CF_ZONE_ID") or ""
     record_id = args.record_id or os.environ.get("CF_DNS_RECORD_ID") or cfg.get("CF_DNS_RECORD_ID") or ""
     record_name = args.record_name or os.environ.get("CF_RECORD_NAME") or cfg.get("CF_RECORD_NAME") or ""
+    # Вторая запись (SSH). Только из env/config, без CLI-аргументов.
+    ssh_record_id = os.environ.get("CF_DNS_RECORD_ID_SSH") or cfg.get("CF_DNS_RECORD_ID_SSH") or ""
+    ssh_record_name = os.environ.get("CF_RECORD_NAME_SSH") or cfg.get("CF_RECORD_NAME_SSH") or ""
+    records = [(zone_id, record_id, record_name)]
+    if ssh_record_id and ssh_record_name:
+        records.append((zone_id, ssh_record_id, ssh_record_name))
 
     state_file = args.state_file or str(HERE / "state" / "dns_last_ip.txt")
 
@@ -231,29 +287,46 @@ def main():
     if not token:
         fail("Нет токена Cloudflare: задайте переменную окружения CF_API_TOKEN или CF_API_TOKEN в config.py")
         return 1
-    if not zone_id or not record_id:
-        fail("Нужны Zone ID и Record ID: аргументы --zone-id/--record-id или значения в config.py")
-        return 1
-    if not record_name:
-        fail("Нужно имя записи: --record-name или CF_RECORD_NAME в config.py")
-        return 1
+    for z, r, n in records:
+        if not z or not r:
+            fail("Нужны Zone ID и Record ID: аргументы --zone-id/--record-id или значения в config.py")
+            return 1
+        if not n:
+            fail("Нужно имя записи: --record-name или CF_RECORD_NAME в config.py")
+            return 1
 
     if args.dry_run:
-        print(f"[dry-run] Обновил бы A-запись {record_name} → {ip} (zone {zone_id}, record {record_id})")
+        for z, r, n in records:
+            print(f"[dry-run] Обновил бы A-запись {n} → {ip} (zone {z}, record {r})")
         print("[dry-run] API не вызывался, state-файл не менялся")
         return 0
 
-    # 4. Обновление в Cloudflare.
-    info(f"Обновляю A-запись {record_name} → {ip}…")
-    ok_api, msg = cf_update_record(token, zone_id, record_id, record_name, ip)
-    if not ok_api:
-        fail(f"Запись не обновлена: {msg}. State-файл не менялся.")
-        return 1
-    ok(f"Cloudflare: {record_name} → {ip}")
+    # 4. Обновление в Cloudflare (все записи).
+    for z, r, n in records:
+        info(f"Обновляю A-запись {n} → {ip}…")
+        ok_api, msg = cf_update_record(token, z, r, n, ip)
+        if not ok_api:
+            fail(f"Запись {n} не обновлена: {msg}. State-файл не менялся.")
+            return 1
+        ok(f"Cloudflare: {n} → {ip}")
 
     # 5. Только при успехе пишем новый IP в state-файл.
     write_last_ip(state_file, ip)
     ok(f"Новый IP записан в state-файл: {state_file}")
+
+    # 6. Telegram-хук: одно сообщение при смене IP.
+    # Неудача отправки НЕ отменяет обновление DNS.
+    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("TELEGRAM_BOT_TOKEN") or ""
+    tg_chat = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("TELEGRAM_CHAT_ID") or ""
+    if tg_token and tg_chat:
+        names = ", ".join(n for _, _, n in records)
+        text = f"IP debian-nested обновлён на {ip}\n{names}"
+        if tg_notify(tg_token, tg_chat, text):
+            ok("Telegram: уведомление отправлено")
+        else:
+            warn("Telegram: уведомление НЕ отправлено (DNS уже обновлён)")
+    else:
+        info("Telegram не настроен, уведомление пропущено")
     return 0
 
 
