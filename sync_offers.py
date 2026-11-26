@@ -118,9 +118,9 @@ def update_js_plans(js_text, new_entries):
             continue
         item = new_map[pid]
         cur = existing[pid]
-        note = item.get("note") or cur["note"]
+        note = cur["note"] or item.get("note") or ""
         # Убираем пометку [кандидат], если оффер подтверждён живым сканом!
-        if item.get("confirmed_live") and note.startswith("[кандидат]"):
+        if item.get("confirmed_live") and "[кандидат]" in note:
             note = note.replace("[кандидат]", "").strip()
         if (item["sku"], item["offer"], note) != (cur["sku"], cur["offer"], cur["note"]):
             comma = "," if line.rstrip().endswith(",") else ""

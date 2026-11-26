@@ -33,6 +33,8 @@
 # подряд и говорит, что проверить (см. --max-errors). Не надо ждать все 109.
 #
 set -u
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
 cd "$(dirname "$0")"
 
 PKG="com.google.android.apps.subscriptions.red"
@@ -73,12 +75,17 @@ echo "Офферов в списке: $TOTAL, задержка ${DELAY}с, ус�
 
 if [ "$DRY_RUN" -eq 1 ]; then
   i=0
-  while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
+  while IFS="$(printf '\t')" read -r -u 3 key sku offer || [ -n "$key" ]; do
+    key=$(printf '%s' "$key" | tr -d '\r')
+    sku=$(printf '%s' "$sku" | tr -d '\r')
+    offer=$(printf '%s' "$offer" | tr -d '\r')
+    [ -n "$key" ] || continue
+    case "$key" in \#*) continue ;; esac
     i=$((i + 1))
     [ "$i" -lt "$START" ] && continue
     [ -n "$ONLY" ] && [ "$key" != "$ONLY" ] && continue
     printf '[%s/%s] %s  sku=%s offer=%s\n' "$i" "$TOTAL" "$key" "$sku" "${offer:-<базовый>}"
-  done < "$OFFERS_FILE"
+  done 3< "$OFFERS_FILE"
   echo "Dry-run: ничего не запускалось."
   exit 0
 fi
@@ -141,7 +148,8 @@ echo "Google One pid=$G1_PID"
 
 TS=$(date +%Y%m%d-%H%M%S)
 RESULTS="scan-results-$TS.log"
-TMPDIR_SCAN=$(mktemp -d)
+TMPDIR_SCAN=".scan-tmp-$TS-$$"
+mkdir -p "$TMPDIR_SCAN"
 FRIDA_PID=""
 cleanup() {
   [ -n "$FRIDA_PID" ] && kill "$FRIDA_PID" 2>/dev/null
@@ -155,7 +163,12 @@ echo
 
 LIVE=0; MISSING=0; ERRORS=0; CONSEC_ERRORS=0
 i=0
-while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
+while IFS="$(printf '\t')" read -r -u 3 key sku offer || [ -n "$key" ]; do
+  key=$(printf '%s' "$key" | tr -d '\r')
+  sku=$(printf '%s' "$sku" | tr -d '\r')
+  offer=$(printf '%s' "$offer" | tr -d '\r')
+  [ -n "$key" ] || continue
+  case "$key" in \#*) continue ;; esac
   i=$((i + 1))
   [ "$i" -lt "$START" ] && continue
   [ -n "$ONLY" ] && [ "$key" != "$ONLY" ] && continue
@@ -173,7 +186,10 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   fi
 
   # Валидация sku и offer перед подстановкой в JS-шаблон (защита от инъекции в sed/JS).
-  if ! printf '%s' "$sku" | grep -Eq '^[A-Za-z0-9._-]+$' || ! printf '%s' "$offer" | grep -Eq '^[A-Za-z0-9._-]*$'; then
+  sku_bad=0; offer_bad=0
+  case "$sku" in ""|*[!A-Za-z0-9._-]*) sku_bad=1 ;; esac
+  case "$offer" in *[!A-Za-z0-9._-]*) offer_bad=1 ;; esac
+  if [ "$sku_bad" -eq 1 ] || [ "$offer_bad" -eq 1 ]; then
     echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> error (недопустимые символы в sku/offer)" >&2
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$sku" "$offer" "error" "" "" >> "$RESULTS"
     ERRORS=$((ERRORS + 1))
@@ -184,11 +200,13 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   probe_js="$TMPDIR_SCAN/probe.js"
   sed -e "s/__SKU__/$sku/g" -e "s/__OFFER__/$offer/g" "$TEMPLATE" > "$probe_js"
   out_log="$TMPDIR_SCAN/out.log"
+  done_flag="$TMPDIR_SCAN/done.flag"
   : > "$out_log"
+  rm -f "$done_flag"
 
-  frida -D "$SERIAL" -p "$G1_PID" -l "$probe_js" --no-pause > "$out_log" 2>&1 &
+  ( while [ ! -f "$done_flag" ]; do sleep 0.2; done ) | frida -D "$SERIAL" -p "$G1_PID" -l "$probe_js" > "$out_log" 2>&1 &
   FRIDA_PID=$!
-  # Ждём строку RESULT (до TIMEOUT секунд), потом убиваем frida.
+  # Ждём строку RESULT (до TIMEOUT секунд), потом закрываем stdin и убиваем frida.
   waited=0
   while ! grep -q '\[probe\] RESULT' "$out_log" 2>/dev/null; do
     kill -0 "$FRIDA_PID" 2>/dev/null || break
@@ -196,6 +214,7 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
     sleep 0.5
     waited=$((waited + 1))
   done
+  : > "$done_flag"
   kill "$FRIDA_PID" 2>/dev/null
   wait "$FRIDA_PID" 2>/dev/null
   FRIDA_PID=""
@@ -205,16 +224,17 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   result=$(grep '\[probe\] RESULT' "$out_log" 2>/dev/null | tail -1)
   if [ -z "$result" ]; then
     status="error"; price=""; period=""
+    ERRORS=$((ERRORS + 1))
     fail_log="scan-fail-$key.log"
     cp "$out_log" "$fail_log" 2>/dev/null
     echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> error (нет ответа от probe)"
     echo "  Полный вывод frida сохранён в $fail_log, последние строки:"
     tail -8 "$fail_log" 2>/dev/null | sed 's/^/    /'
   else
-    status=$(echo "$result" | sed -n 's/.*status=\([^ ]*\).*/\1/p')
-    code=$(echo "$result" | sed -n 's/.*code=\([^ ]*\).*/\1/p')
-    price=$(echo "$result" | sed -n 's/.*priceMicros=\([^ ]*\).*/\1/p')
-    period=$(echo "$result" | sed -n 's/.*period=\([^ ]*\).*/\1/p')
+    status=$(echo "$result" | sed -n 's/.*status=\([a-z]*\).*/\1/p')
+    code=$(echo "$result" | sed -n 's/.*code=\([A-Za-z0-9_-]*\).*/\1/p')
+    price=$(echo "$result" | sed -n 's/.*priceMicros=\([0-9]*\).*/\1/p')
+    period=$(echo "$result" | sed -n 's/.*period=\(P[0-9DWMY]*\).*/\1/p')
     case "$status" in
       live)    LIVE=$((LIVE + 1)) ;;
       missing) MISSING=$((MISSING + 1)) ;;
@@ -242,7 +262,7 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
   if [ -z "$ONLY" ] && [ "$i" -lt "$TOTAL" ]; then
     sleep "$DELAY"
   fi
-done < "$OFFERS_FILE"
+done 3< "$OFFERS_FILE"
 
 echo
 echo "Готово: live=$LIVE missing=$MISSING error=$ERRORS"
