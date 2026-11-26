@@ -23,6 +23,7 @@ import json
 import lzma
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -169,6 +170,7 @@ class Adb:
             cmd += ["-s", s]
         return subprocess.run(
             cmd + args,
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
         )
@@ -402,8 +404,14 @@ def remote_sha256(remote_path):
     """Возвращает SHA-256 файла на устройстве БЕЗ его запуска (или '')."""
     if not SAFE_REMOTE_PATH_RE.match(remote_path):
         raise ValueError(f"Небезопасный удалённый путь: {remote_path!r}")
+    if not remote_exists(remote_path):
+        return ""
     for args in (["sha256sum", "-b", remote_path], ["toybox", "sha256sum", "-b", remote_path]):
-        out = adb.shell(*args)
+        try:
+            r = adb.run(["shell", *args], timeout=15)
+            out = ((r.stdout or "") + (r.stderr or "")).strip()
+        except subprocess.TimeoutExpired:
+            continue
         if "No such" in out or "not found" in out.lower() or "permission denied" in out.lower():
             continue
         m = SHA256_RE.search(out)
@@ -485,14 +493,15 @@ def google_accounts():
 
 
 def su_sh(cmd):
+    qcmd = shlex.quote(cmd)
     if shell_is_root():
-        r = adb.run(["shell", "sh", "-c", cmd])
+        r = adb.run(["shell", f"sh -c {qcmd}"], timeout=20)
         return ((r.stdout or "") + (r.stderr or "")).strip()
-    r = adb.run(["shell", "su", "-c", cmd])
+    r = adb.run(["shell", f"su -c {qcmd}"], timeout=20)
     text = ((r.stdout or "") + (r.stderr or "")).strip()
     bad = r.returncode != 0 or "inaccessible" in text or "not found" in text.lower()
     if bad:
-        r = adb.run(["shell", "su", "0", "sh", "-c", cmd])
+        r = adb.run(["shell", f"su 0 sh -c {qcmd}"], timeout=20)
         text = ((r.stdout or "") + (r.stderr or "")).strip()
     return text
 

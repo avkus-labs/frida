@@ -175,20 +175,26 @@ def vm_mac(name, xml_cache=None):
 
 
 def dnsmasq_leases():
-    """DHCP-аренды из virbr0.status: {mac: ip}."""
+    """DHCP-аренды libvirt: сначала `virsh net-dhcp-leases default`, затем virbr0.status."""
     leases = {}
-    p = Path(DNSMASQ_STATUS)
-    if not p.exists():
-        return leases
+    rc, out, _ = virsh("net-dhcp-leases", "default")
+    if rc == 0:
+        for line in (out or "").splitlines():
+            m = re.search(
+                r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\s+ipv4\s+(\d+\.\d+\.\d+\.\d+)(?:/\d+)?",
+                line,
+            )
+            if m and is_valid_ipv4(m.group(2)):
+                leases[m.group(1).lower()] = m.group(2)
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(Path(DNSMASQ_STATUS).read_text(encoding="utf-8"))
         for entry in data:
             mac = (entry.get("mac-address") or "").lower()
             ip = entry.get("ip-address") or ""
-            if mac and is_valid_ipv4(ip):
+            if mac and is_valid_ipv4(ip) and mac not in leases:
                 leases[mac] = ip
-    except Exception as e:
-        warn(f"Не удалось прочитать {DNSMASQ_STATUS}: {e}")
+    except Exception:
+        pass
     return leases
 
 

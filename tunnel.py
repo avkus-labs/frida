@@ -302,7 +302,7 @@ def main():
         if service == "VNC":
             print(f"    VNC → 127.0.0.1:{local}  # {vm}")
 
-    ssh_cmd = [args.ssh] + ssh_opts + ["-p", str(args.port)]
+    ssh_cmd = [args.ssh] + ssh_opts + ["-N", "-p", str(args.port)]
     for local, t_host, t_port, _service, _vm in forwards:
         ssh_cmd += ["-L", f"{local}:{t_host}:{t_port}"]
     ssh_cmd += [f"{args.user}@{args.host}"]
