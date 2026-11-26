@@ -4,17 +4,22 @@
 
   python main.py
 
-Обнаруживает ADB, подключается к эмулятору или телефону и копирует недостающие компоненты.
+Обнаруживает ADB, подключается к эмулятору или телефону и копирует недостающие компоненты
+с обязательной проверкой целостности (SHA-256) до первого запуска.
 Требуются root-доступ, вход в аккаунт Google и приложение Google One на устройстве.
 После выбора тарифа открывается экран оформления. Подписку подтверждает пользователь.
 
 Режим продления в меню соответствует STACK=true в frida.js.
-В этом режиме используется действующая подписка Google One.
+В этом режиме сначала используется штатный BillingClient.queryPurchasesAsync,
+а при пустом ответе — резервный поиск по всем основным тарифам g1.* со стороны ПК.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import glob
+import hashlib
+import json
 import lzma
 import os
 import re
@@ -36,6 +41,18 @@ PKG = "com.google.android.apps.subscriptions.red"
 ACT = PKG + "/com.google.android.apps.subscriptions.red.main.MainActivity"
 DEX_REMOTE = "/data/local/tmp/module_521.apk"
 FRIDA_REMOTE = "/data/local/tmp/frida-server"
+PLAY_DB_REMOTE = "/data/data/com.android.vending/databases/library.db"
+
+# Эталонные SHA-256 проверенных артефактов.
+EXPECTED_MODULE_SHA256 = "38a1cd132f10b31c3f4ec85d341764c702148175e2db7e480a288468b39b7b74"
+KNOWN_FRIDA_XZ_SHA256 = {
+    ("17.9.1", "android-x86_64"): "f5f1205ffb3cb145de9264a8c6aa7aa8724a2e33df319d476f2ef67cac453c5f",
+    ("17.27.4", "android-x86_64"): "e30e8d8dcefa6d8b78b5b6a613b42c102d5dfa0e0e47ac7ce27590dc8f05a4db",
+}
+KNOWN_FRIDA_BIN_SHA256 = {
+    ("17.9.1", "android-x86_64"): "fd677533f1215654308e06db3c34905ed6a456a39343696b2f38ead09415884d",
+    ("17.27.4", "android-x86_64"): "69846bb6e0a554bc776f9e71a57bc03a9af983f8eeec232d5875989e5199a977",
+}
 
 ABI_ASSET = {
     "arm64-v8a": "android-arm64",
@@ -64,6 +81,9 @@ GROUPS = [
         "ultra_1m_90", "ultra_3m_90", "ultra_3m_80", "ultra_1m_75", "ultra_3m_75",
     ]),
 ]
+
+SHA256_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
+SAFE_REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 
 
 def _fix_stdio():
@@ -126,9 +146,21 @@ def find_adb_exe():
 
 
 class Adb:
-    def __init__(self, serial=""):
-        self.exe = find_adb_exe()
-        self.serial = serial or os.environ.get("ANDROID_SERIAL") or ""
+    def __init__(self, serial="", explicit=False):
+        self._exe = None
+        env_serial = os.environ.get("ANDROID_SERIAL") or ""
+        self.serial = serial or env_serial
+        self.explicit = bool(explicit or self.serial)
+
+    @property
+    def exe(self):
+        if not self._exe:
+            self._exe = find_adb_exe()
+        return self._exe
+
+    @exe.setter
+    def exe(self, value):
+        self._exe = value
 
     def _cmd(self, args, serial=None, timeout=None):
         cmd = [self.exe]
@@ -141,8 +173,8 @@ class Adb:
             timeout=timeout,
         )
 
-    def run(self, args, serial=None):
-        return self._cmd(args, serial=serial)
+    def run(self, args, serial=None, timeout=None):
+        return self._cmd(args, serial=serial, timeout=timeout)
 
     def shell(self, *parts):
         r = self._cmd(["shell", *parts])
@@ -150,7 +182,7 @@ class Adb:
 
     def devices(self):
         rows = []
-        out = self._cmd(["devices"], serial="").stdout
+        out = self._cmd(["devices"], serial="").stdout or ""
         for ln in out.splitlines()[1:]:
             bits = ln.split()
             if len(bits) >= 2 and bits[-1] == "device":
@@ -238,20 +270,34 @@ class Adb:
         return rows
 
     def pick(self):
-        rows = self.discover()
-        if self.serial and self.serial in rows:
+        # Если устройство задано явно (через --serial, ANDROID_SERIAL или атрибут serial),
+        # НИКОГДА не переключаемся на другое устройство при его недоступности.
+        if self.serial:
+            info(f"adb: {self.exe}")
+            rows = self.devices()
+            if self.serial not in rows and ":" in self.serial:
+                self._cmd(["connect", self.serial], serial="")
+                rows = self.devices()
+            if self.serial not in rows:
+                fail(
+                    f"Явно выбранное устройство {self.serial} недоступно в `adb devices`. "
+                    "Автоматическая подмена устройства запрещена — операция остановлена."
+                )
+                sys.exit(1)
+            os.environ["ANDROID_SERIAL"] = self.serial
             ok(f"Устройство: {self.serial}")
             return self.serial
-        if self.serial and self.serial not in rows:
-            warn(f"Устройство {self.serial} недоступно. Включён автоматический выбор")
+
+        rows = self.discover()
         if len(rows) == 1:
             self.serial = rows[0]
         else:
-            ranked = sorted(rows, key=self._score, reverse=True)
+            scores = {s: self._score(s) for s in rows}
+            ranked = sorted(rows, key=lambda s: scores[s], reverse=True)
             self.serial = ranked[0]
             info("Найдено несколько устройств. Выбрано устройство с наибольшей оценкой:")
             for s in ranked:
-                info(f"  {s}  score={self._score(s)}")
+                info(f"  {s}  score={scores[s]}")
         os.environ["ANDROID_SERIAL"] = self.serial
         ok(f"Устройство: {self.serial}")
         return self.serial
@@ -261,13 +307,13 @@ adb = Adb()
 
 
 def parse_plans(js_text):
-    """Parse PLANS from frida.js so the menu stays in sync with the hook."""
+    """Parse PLANS from frida.js (including base plans with empty offer)."""
     block = re.search(r"var PLANS = \{([\s\S]*?)\n\};", js_text)
     if not block:
         return {}
     plans = {}
     for m in re.finditer(
-        r"(\w+)\s*:\s*\{\s*sku:\s*\"([^\"]+)\"\s*,\s*offer:\s*\"([^\"]+)\"\s*,\s*note:\s*\"([^\"]*)\"",
+        r"(\w+)\s*:\s*\{\s*sku:\s*\"([^\"]+)\"\s*,\s*offer:\s*\"([^\"]*)\"\s*,\s*note:\s*\"([^\"]*)\"",
         block.group(1),
     ):
         plans[m.group(1)] = {"sku": m.group(2), "offer": m.group(3), "note": m.group(4)}
@@ -311,7 +357,7 @@ def print_menu(plans, stack, addon):
     for title, items in groups:
         print(f"\n  [{title}]")
         for pid, spec in items:
-            print(f"  {n:2d}. {pid:<16} {spec['note']}")
+            print(f"  {n:3d}. {pid:<20} {spec['note']}")
             index[str(n)] = pid
             index[pid] = pid
             n += 1
@@ -325,6 +371,50 @@ def print_menu(plans, stack, addon):
     print("  q  Выход")
     print()
     return index, rows
+
+
+# ── хеши и проверка целостности ──────────────────────────────────────────────
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest().lower()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 256)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest().lower()
+
+
+def is_elf_binary(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def remote_sha256(remote_path):
+    """Возвращает SHA-256 файла на устройстве БЕЗ его запуска (или '')."""
+    if not SAFE_REMOTE_PATH_RE.match(remote_path):
+        raise ValueError(f"Небезопасный удалённый путь: {remote_path!r}")
+    for args in (["sha256sum", "-b", remote_path], ["toybox", "sha256sum", "-b", remote_path]):
+        out = adb.shell(*args)
+        if "No such" in out or "not found" in out.lower() or "permission denied" in out.lower():
+            continue
+        m = SHA256_RE.search(out)
+        if m:
+            return m.group(1).lower()
+    out = su_sh(f"sha256sum -b {remote_path}")
+    if "No such" not in out:
+        m = SHA256_RE.search(out)
+        if m:
+            return m.group(1).lower()
+    return ""
 
 
 # ── environment ──────────────────────────────────────────────────────────────
@@ -413,61 +503,152 @@ def remote_exists(path):
 
 
 def ensure_module():
-    if remote_exists(DEX_REMOTE):
-        ok(f"Модуль уже есть на устройстве: {DEX_REMOTE}")
+    """Гарантирует, что на устройстве лежит module_521.apk с эталонным SHA-256."""
+    dev_hash = remote_sha256(DEX_REMOTE)
+    if dev_hash == EXPECTED_MODULE_SHA256:
+        ok(f"Модуль проверен по SHA-256: {DEX_REMOTE}")
         return
-    info("Модуль module_521.apk отсутствует. Распаковка встроенного DEX и копирование на устройство…")
+    if dev_hash:
+        warn("SHA-256 module_521.apk на устройстве не совпал с эталоном — заменяю файл")
+    else:
+        info("Модуль module_521.apk отсутствует. Распаковка встроенного DEX и копирование на устройство…")
     try:
         from module_b64 import MODULE_B64
     except Exception as e:
         fail(f"Не удалось прочитать module_b64.py: {e}")
         sys.exit(1)
-    import base64
-    tmp = Path(tempfile.gettempdir()) / "module_521.apk"
-    tmp.write_bytes(base64.b64decode(MODULE_B64))
-    r = adb.run(["push", str(tmp), DEX_REMOTE])
-    print((r.stdout or r.stderr or "").strip(), flush=True)
-    adb.shell("chmod", "644", DEX_REMOTE)
-    if not remote_exists(DEX_REMOTE):
-        fail("Не удалось скопировать module_521.apk на устройство")
+    raw = base64.b64decode(MODULE_B64)
+    actual_local = sha256_bytes(raw)
+    if actual_local != EXPECTED_MODULE_SHA256:
+        fail(
+            f"Нарушена целостность module_b64.py: SHA-256={actual_local}, "
+            f"ожидался {EXPECTED_MODULE_SHA256}"
+        )
         sys.exit(1)
-    ok("Модуль module_521.apk скопирован")
+    tmp = Path(tempfile.gettempdir()) / f"module_521_{os.getpid()}.apk"
+    try:
+        tmp.write_bytes(raw)
+        r = adb.run(["push", str(tmp), DEX_REMOTE])
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
+        if out:
+            print(out, flush=True)
+        if r.returncode != 0:
+            fail(f"adb push для module_521.apk завершился с ошибкой (код {r.returncode})")
+            sys.exit(1)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    adb.shell("chmod", "644", DEX_REMOTE)
+    if remote_sha256(DEX_REMOTE) != EXPECTED_MODULE_SHA256:
+        fail("Проверка SHA-256 module_521.apk на устройстве после копирования не прошла")
+        sys.exit(1)
+    ok("Модуль module_521.apk скопирован и проверен по SHA-256")
 
 
 def _xz_to_file(xz_path, dest):
     data = lzma.open(xz_path).read()
-    dest.write_bytes(data)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(dest)
     return dest
 
 
-def local_frida_server(abi_tag):
-    """Find a host-side frida-server binary matching the device ABI."""
-    named = [
-        HERE / "assets" / f"frida-server-{abi_tag}",
-        BIN / f"frida-server-{abi_tag}",
-    ]
-    for p in named:
-        if p.is_file() and p.stat().st_size > 1024 * 1024:
-            return p
-    generic = BIN / "frida-server"
-    if abi_tag == "android-x86_64" and generic.is_file() and generic.stat().st_size > 1024 * 1024:
-        return generic
+def fetch_github_asset_sha256(ver, asset_name):
+    """Запрашивает официальный SHA-256 релиза Frida через GitHub Releases API."""
+    pinned = KNOWN_FRIDA_XZ_SHA256.get((ver, asset_name.replace(f"frida-server-{ver}-", "").replace(".xz", "")))
+    if pinned:
+        return pinned
+    url = f"https://api.github.com/repos/frida/frida/releases/tags/{ver}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "frida-verifier",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            release = json.loads(resp.read().decode("utf-8", "replace"))
+        for asset in release.get("assets") or []:
+            if asset.get("name") != asset_name:
+                continue
+            digest = str(asset.get("digest") or "")
+            if digest.lower().startswith("sha256:"):
+                cand = digest.split(":", 1)[1].strip().lower()
+                if len(cand) == 64:
+                    return cand
+    except Exception as e:
+        warn(f"Не удалось получить SHA-256 релиза из GitHub API: {e}")
+    return ""
+
+
+def verify_local_frida_binary(path, ver, abi_tag):
+    """Проверяет локальный распакованный frida-server (ELF + известный SHA-256)."""
+    if not path or not path.is_file() or path.stat().st_size <= 1024 * 1024:
+        return False
+    if not is_elf_binary(path):
+        warn(f"Файл {path} не является ELF-бинарником")
+        return False
+    pinned_bin = KNOWN_FRIDA_BIN_SHA256.get((ver, abi_tag))
+    if pinned_bin and sha256_file(path) != pinned_bin:
+        warn(f"SHA-256 локального {path.name} не совпал с эталоном для {ver}/{abi_tag}")
+        return False
+    return True
+
+
+def local_frida_server(abi_tag, ver=""):
+    """Ищет локальный frida-server в assets/ или ../bin/ (включая версионированные имена)."""
     cache = HERE / "assets"
     cache.mkdir(exist_ok=True)
-    unpacked = cache / f"frida-server-{abi_tag}"
-    if unpacked.is_file() and unpacked.stat().st_size > 1024 * 1024:
-        return unpacked
-    xz_candidates = [
-        HERE / "assets" / f"frida-server-{abi_tag}.xz",
+    candidates = []
+    if ver:
+        candidates += [
+            cache / f"frida-server-{ver}-{abi_tag}",
+            BIN / f"frida-server-{ver}-{abi_tag}",
+        ]
+    else:
+        candidates += sorted(cache.glob(f"frida-server-*-{abi_tag}"), reverse=True)
+    candidates += [
+        cache / f"frida-server-{abi_tag}",
+        BIN / f"frida-server-{abi_tag}",
+    ]
+    if abi_tag == "android-x86_64":
+        candidates.append(BIN / "frida-server")
+    for p in candidates:
+        if verify_local_frida_binary(p, ver, abi_tag):
+            return p
+
+    xz_candidates = []
+    if ver:
+        xz_candidates += [
+            cache / f"frida-server-{ver}-{abi_tag}.xz",
+            BIN / f"frida-server-{ver}-{abi_tag}.xz",
+        ]
+    else:
+        xz_candidates += sorted(cache.glob(f"frida-server-*-{abi_tag}.xz"), reverse=True)
+    xz_candidates += [
+        cache / f"frida-server-{abi_tag}.xz",
         BIN / f"frida-server-{abi_tag}.xz",
     ]
     if abi_tag == "android-x86_64":
         xz_candidates.append(BIN / "frida-server-x86_64.xz")
+
     for xz in xz_candidates:
         if not xz.is_file():
             continue
+        pinned_xz = KNOWN_FRIDA_XZ_SHA256.get((ver, abi_tag))
+        if pinned_xz and sha256_file(xz) != pinned_xz:
+            warn(f"SHA-256 архива {xz.name} не совпал с эталоном — пропускаю")
+            continue
+        dest_name = f"frida-server-{ver}-{abi_tag}" if ver else f"frida-server-{abi_tag}"
+        unpacked = cache / dest_name
         info(f"Распаковка {xz.name}…")
-        return _xz_to_file(xz, unpacked)
+        _xz_to_file(xz, unpacked)
+        if verify_local_frida_binary(unpacked, ver, abi_tag):
+            return unpacked
+        unpacked.unlink(missing_ok=True)
     return None
 
 
@@ -475,24 +656,51 @@ def download_frida_server(ver, abi_tag):
     cache = HERE / "assets"
     cache.mkdir(exist_ok=True)
     name = f"frida-server-{ver}-{abi_tag}.xz"
+    expected_xz_sha = KNOWN_FRIDA_XZ_SHA256.get((ver, abi_tag)) or fetch_github_asset_sha256(ver, name)
+    if not expected_xz_sha:
+        fail(
+            f"Не удалось подтвердить эталонный SHA-256 для {name}. "
+            "Автозагрузка непроверенного бинарника заблокирована."
+        )
+        return None
     url = f"https://github.com/frida/frida/releases/download/{ver}/{name}"
     xz = cache / name
+    part = cache / (name + ".part")
     info(f"Загрузка {url}")
     try:
-        urllib.request.urlretrieve(url, xz)
+        req = urllib.request.Request(url, headers={"User-Agent": "frida-verifier"})
+        with urllib.request.urlopen(req, timeout=180) as resp, open(part, "wb") as f:
+            while True:
+                chunk = resp.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+        got_sha = sha256_file(part)
+        if got_sha != expected_xz_sha:
+            fail(f"SHA-256 скачанного {name} ({got_sha}) != ожидаемому ({expected_xz_sha})")
+            part.unlink(missing_ok=True)
+            return None
+        part.replace(xz)
     except Exception as e:
+        part.unlink(missing_ok=True)
         fail(f"Ошибка загрузки: {e}")
         return None
     dest = cache / f"frida-server-{ver}-{abi_tag}"
-    return _xz_to_file(xz, dest)
+    _xz_to_file(xz, dest)
+    if not verify_local_frida_binary(dest, ver, abi_tag):
+        dest.unlink(missing_ok=True)
+        return None
+    return dest
 
 
-def remote_frida_version():
-    if not remote_exists(FRIDA_REMOTE):
-        return ""
-    out = adb.shell(FRIDA_REMOTE, "--version") or su_sh(f"{FRIDA_REMOTE} --version")
-    m = re.search(r"(\d+\.\d+\.\d+)", out or "")
-    return m.group(1) if m else ""
+def remote_frida_is_root():
+    out = adb.shell("ps", "-A") or adb.shell("ps") or ""
+    for line in out.splitlines():
+        if "frida-server" in line:
+            parts = line.split()
+            if parts and parts[0] == "root":
+                return True
+    return False
 
 
 def start_remote_frida():
@@ -500,20 +708,40 @@ def start_remote_frida():
     su_sh("killall -9 frida-server")
     time.sleep(0.5)
     if shell_is_root():
-        adb._cmd(["shell", f"chmod 755 {FRIDA_REMOTE} && {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
+        try:
+            adb._cmd(
+                ["shell", f"chmod 755 {FRIDA_REMOTE} && {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"],
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            pass
         time.sleep(1.5)
         return (adb.shell("pidof", "frida-server") or "").strip()
-    adb._cmd(["shell", "su", "-c", f"chmod 755 {FRIDA_REMOTE}; {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
+
+    try:
+        adb._cmd(
+            ["shell", "su", "-c", f"chmod 755 {FRIDA_REMOTE}; {FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"],
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pass
     time.sleep(1.5)
     running = (adb.shell("pidof", "frida-server") or "").strip()
     if not running:
-        adb._cmd(["shell", "su", "0", "sh", "-c", f"{FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"], timeout=10)
+        try:
+            adb._cmd(
+                ["shell", "su", "0", "sh", "-c", f"{FRIDA_REMOTE} -D </dev/null >/dev/null 2>&1 &"],
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            pass
         time.sleep(1.5)
         running = (adb.shell("pidof", "frida-server") or "").strip()
     return running
 
 
 def ensure_frida_server(ver):
+    """Проверяет SHA-256 frida-server ДО любого исполнения (даже --version не запускается до сверки)."""
     abi = device_abi()
     abi_tag = ABI_ASSET.get(abi, "")
     if not abi_tag:
@@ -521,40 +749,51 @@ def ensure_frida_server(ver):
         sys.exit(1)
     info(f"Архитектура устройства: {abi} -> {abi_tag}")
 
-    remote_ver = remote_frida_version()
-    running = (adb.shell("pidof", "frida-server") or "").strip()
-    if running and remote_ver == ver:
-        ok(f"frida-server {remote_ver} уже запущен, PID={running.split()[0]}")
-        return
-
-    if remote_ver and remote_ver != ver:
-        warn(f"Версия сервера на устройстве ({remote_ver}) отличается от локальной ({ver}). Сервер будет заменён")
-
-    local = None
-    cache = HERE / "assets" / f"frida-server-{ver}-{abi_tag}"
-    if cache.is_file() and cache.stat().st_size > 1024 * 1024:
-        local = cache
+    # 1. Сначала находим и верифицируем эталонный локальный бинарник для нужной версии.
+    local = local_frida_server(abi_tag, ver=ver)
     if local is None:
         local = download_frida_server(ver, abi_tag)
     if local is None:
-        local = local_frida_server(abi_tag)
-    if local is None:
-        fail("Не удалось подготовить frida-server. Ожидался файл для архитектуры устройства в assets/ или ../bin/")
+        fail(
+            f"Не удалось подготовить проверенный frida-server {ver} ({abi_tag}). "
+            "Запуск непроверенного файла на устройстве запрещён."
+        )
         sys.exit(1)
+
+    expected_sha = sha256_file(local)
+    dev_sha = remote_sha256(FRIDA_REMOTE)
+    running = (adb.shell("pidof", "frida-server") or "").strip()
+
+    # 2. Только если SHA-256 на устройстве уже совпадает с проверенным локальным образом
+    #    и процесс работает от root — переиспользуем его без перезаписи.
+    if dev_sha == expected_sha and running and remote_frida_is_root():
+        ok(f"frida-server {ver} проверен по SHA-256 и уже запущен от root, PID={running.split()[0]}")
+        return
 
     if running:
         su_sh("killall -9 frida-server")
         time.sleep(0.5)
 
-    info(f"push {local.name} ({ver}) -> {FRIDA_REMOTE}")
-    r = adb.run(["push", str(local), FRIDA_REMOTE])
-    print((r.stdout or r.stderr or "").strip(), flush=True)
+    if dev_sha != expected_sha:
+        if dev_sha:
+            warn("SHA-256 frida-server на устройстве отличается от эталона — заменяю бинарник")
+        info(f"push {local.name} ({ver}) -> {FRIDA_REMOTE}")
+        r = adb.run(["push", str(local), FRIDA_REMOTE])
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
+        if out:
+            print(out, flush=True)
+        if r.returncode != 0:
+            fail(f"Ошибка копирования frida-server (код {r.returncode}). Запуск с root отменён.")
+            sys.exit(1)
+        if remote_sha256(FRIDA_REMOTE) != expected_sha:
+            fail("SHA-256 скопированного frida-server на устройстве не совпал с ожидаемым! Запуск отменён.")
+            sys.exit(1)
 
     running = start_remote_frida()
     if not running:
-        fail("Не удалось запустить frida-server. Устройству требуется root-доступ.")
+        fail("Не удалось запустить проверенный frida-server. Устройству требуется root-доступ.")
         sys.exit(1)
-    ok(f"frida-server {ver} запущен, PID={running.split()[0]}")
+    ok(f"frida-server {ver} проверен по SHA-256 и запущен, PID={running.split()[0]}")
 
 
 def ensure_google_one():
@@ -608,7 +847,7 @@ def print_env(ver):
     print(f"  Аккаунты Google   {', '.join(accts) if accts else 'нет'}")
     print(f"  Frida на ПК    {ver or 'нет'}")
     print(f"  frida-server  {(adb.shell('pidof', 'frida-server') or 'остановлен').split()[0]}")
-    print(f"  module_521    {'есть' if remote_exists(DEX_REMOTE) else 'нет'}")
+    print(f"  module_521    {'проверен' if remote_sha256(DEX_REMOTE) == EXPECTED_MODULE_SHA256 else 'нет'}")
     g1 = "есть" if "package:" in adb.shell("pm", "path", PKG) else "нет"
     print(f"  Google One    {g1}")
     print("-" * 64)
@@ -624,6 +863,60 @@ def ensure_env():
     ensure_frida_server(ver)
     print_env(ver)
     return ver
+
+
+# ── резервный поиск токена подписки по всем g1.* со стороны ПК ───────────────
+
+def _is_main_g1_sku(sku_or_doc):
+    s = str(sku_or_doc or "")
+    if "g1." not in s:
+        return False
+    for excl in ("_add_on", "youtube_premium", "home_premium", "health_premium"):
+        if excl in s:
+            return False
+    return True
+
+
+def read_play_db_token():
+    """Резервное чтение токена действующей подписки g1.* через adb root (вне процесса Google One).
+
+    Возвращает (token, sku) без вывода самого токена в журнал/консоль.
+    """
+    sql = (
+        "select doc_id, inapp_purchase_data from ownership "
+        "where doc_id like '%g1.%' "
+        "and doc_id not like '%_add_on%' "
+        "and doc_id not like '%youtube_premium%' "
+        "and doc_id not like '%home_premium%' "
+        "and doc_id not like '%health_premium%' "
+        "order by subs_valid_until_time desc limit 10;"
+    )
+    cmd = f"sqlite3 -separator $'\\t' {PLAY_DB_REMOTE} \"{sql}\""
+    out = su_sh(cmd)
+    if not out or "not found" in out.lower() or "no such table" in out.lower():
+        return "", ""
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or "purchaseToken" not in line:
+            continue
+        doc_id, _, raw_json = line.partition("\t")
+        if not raw_json:
+            raw_json = line
+        try:
+            start = raw_json.find("{")
+            end = raw_json.rfind("}")
+            if start < 0 or end <= start:
+                continue
+            data = json.loads(raw_json[start : end + 1])
+        except Exception:
+            continue
+        tok = str(data.get("purchaseToken") or "")
+        prod = str(data.get("productId") or doc_id or "")
+        if tok and _is_main_g1_sku(prod):
+            ok(f"Резервный поиск: найдена подписка {prod}")
+            return tok, prod
+    info("Резервный поиск: подходящих основных подписок g1.* не найдено")
+    return "", ""
 
 
 # ── Google One + Frida session ───────────────────────────────────────────────
@@ -689,6 +982,14 @@ class Session:
         self.last_ev = ""
         self.lock = threading.Lock()
 
+    def _supply_db_token(self):
+        tok, sku = read_play_db_token()
+        if self.script:
+            try:
+                self.script.post({"type": "db_token", "payload": {"token": tok, "sku": sku}})
+            except Exception as e:
+                warn(f"Не удалось передать резервный результат в скрипт: {e}")
+
     def _on_message(self, message, _data):
         if message.get("type") == "error":
             fail(message.get("stack") or message.get("description") or str(message))
@@ -706,9 +1007,12 @@ class Session:
         ev = payload.get("ev") or ""
         with self.lock:
             self.last_ev = ev
+        if ev == "need_db_token":
+            threading.Thread(target=self._supply_db_token, daemon=True).start()
+            return
         bits = [ev] if ev else []
         for k, v in payload.items():
-            if k == "ev" or v in ("", None):
+            if k in ("ev", "token", "old", "head") or v in ("", None):
                 continue
             bits.append(f"{k}={v}")
         print("[g1] " + "  ".join(str(x) for x in bits), flush=True)
@@ -735,7 +1039,11 @@ class Session:
                 break
             time.sleep(0.5)
         if dev is None:
-            dev = frida.get_usb_device(timeout=8)
+            fail(
+                f"Frida не обнаружила выбранное устройство {adb.serial!r}. "
+                "Резервное переключение на случайное USB-устройство отключено."
+            )
+            sys.exit(1)
         self.device = dev
         info(f"attach pid={pid}")
         self.session = dev.attach(pid)
@@ -848,6 +1156,7 @@ def main():
     args = parse_args()
     if args.serial:
         adb.serial = args.serial
+        adb.explicit = True
         os.environ["ANDROID_SERIAL"] = args.serial
 
     if not JS_PATH.is_file():

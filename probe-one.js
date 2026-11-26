@@ -5,8 +5,7 @@
 // Зачем: живые sku/offer для Ultra/Pro видны только в ответе
 // BillingClient, а не на экране Upgrade и не в HTML one.google.com.
 // Этот скрипт пишет в лог каждый productId, offerId, basePlanId,
-// цену и период первого pricing phase, и offerToken (только первые
-// 12 символов, полный токен в лог не пишется).
+// цену и период первого pricing phase (offerToken в лог не пишется).
 //
 // Как запускать (на компьютере, эмулятор уже запущен, root есть):
 //   frida-server должен быть запущен от root, см. артефакт
@@ -28,8 +27,7 @@
 // не знает, это нормально, такой sku просто пропускается.
 
 var DEX_PATHS = [
-  "/data/local/tmp/module_521.apk",
-  "/data/local/tmp/billing.apk"
+  "/data/local/tmp/module_521.apk"
 ];
 
 // Кандидаты для опроса. Несуществующие Play сам игнорирует,
@@ -180,7 +178,7 @@ function logOffers(list) {
       log("offer", {
         product: pid, offerId: oid, basePlan: base,
         priceMicros: price, period: period, recurrenceMode: mode,
-        token: tok ? tok.slice(0, 12) + "..." : ""
+        hasToken: !!tok
       });
     }
   }

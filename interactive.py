@@ -5,26 +5,24 @@ interactive.py — интерактивный вход в Google-аккаунт 
 
 Что делает:
   1. Подключается к устройству по serial (домен:5555 или IP:5555), проверяет root.
-  2. Проверяет Google-аккаунты на устройстве. Если аккаунт уже есть — предлагает
-     использовать его или добавить новый. Если нет — проводит через вход:
-     email → пароль → 2FA (если нужна).
+  2. Проверяет Google-аккаунты на устройстве. Вход в аккаунт и переключение
+     активного аккаунта выполняются пользователем в штатном интерфейсе Android
+     (через VNC) — скрипт не запрашивает и не передаёт пароль или коды 2FA.
   3. Открывает Google One.
-  4. Показывает нумерованный список тарифов (из GROUPS в main.py или из offers.txt)
+  4. Показывает нумерованный список тарифов из frida.js (или offers.txt)
      и вызывает `python main.py --serial <serial> --plan <id>`.
   5. После отработки main.py спрашивает, сработал ли план; если нет — предлагает
-     выбрать другой тариф или выйти; если да — напоминает, что ввод карты вручную.
+     выбрать другой тариф или выйти; если да — напоминает, что подтверждение вручную.
 
-Пароль и код 2FA никогда не берутся из аргументов командной строки —
-только через getpass/input. Только стандартная библиотека.
+Учётные данные никогда не запрашиваются в Python и не передаются через ADB.
+Только стандартная библиотека.
 """
 
 from __future__ import annotations
 
 import argparse
-import getpass
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -148,17 +146,7 @@ class Adb:
         return False
 
 
-# ── ввод текста через adb ────────────────────────────────────────────────────
-
-def adb_input_text(adb, text):
-    """Отправляет текст в активное поле: пробелы → %s, безопасное экранирование для sh."""
-    escaped = shlex.quote(text.replace(" ", "%s"))
-    adb.shell("input", "text", escaped)
-
-
-def press_enter(adb):
-    adb.shell("input", "keyevent", "66")
-
+# ── взаимодействие с пользователем ───────────────────────────────────────────
 
 def wait_user(msg="Нажмите Enter, чтобы продолжить…"):
     input(msg)
@@ -174,102 +162,70 @@ def google_accounts(adb):
     return [n.strip() for n in ACCOUNT_RE_ALT.findall(out or "")]
 
 
-def add_account_flow(adb, prefill_email=""):
-    """Интерактивный вход в Google-аккаунт через экран добавления аккаунта."""
+def add_account_flow(adb):
+    """Открывает штатный экран добавления аккаунта в Android и ждёт завершения входа."""
     print()
-    print("  Открою экран добавления Google-аккаунта.")
-    print("  Если поле ввода не в фокусе — ткните в него мышкой в окне VNC,")
-    print("  и только потом нажимайте Enter здесь.")
+    print("  Открываю штатный экран добавления Google-аккаунта на устройстве.")
+    print("  Введите email, пароль и код 2FA непосредственно в окне Android (VNC).")
+    print("  Скрипт не запрашивает и не передаёт учётные данные через ADB.")
     adb.shell("am", "start", "-a", "android.settings.ADD_ACCOUNT_SETTINGS")
-    wait_user("  Экран добавления аккаунта открыт. Нажмите Enter, когда будете готовы ввести email…")
-
-    email = prefill_email or input("  Email (логин Google): ").strip()
-    while not email:
-        email = input("  Email не может быть пустым, введите ещё раз: ").strip()
-    adb_input_text(adb, email)
-    press_enter(adb)
-    ok("Email отправлен, нажат Enter")
-    wait_user("  Нажмите Enter, когда появится поле пароля…")
-
-    password = getpass.getpass("  Пароль (не отображается при вводе): ")
-    while not password:
-        password = getpass.getpass("  Пароль не может быть пустым, введите ещё раз: ")
-    adb_input_text(adb, password)
-    press_enter(adb)
-    ok("Пароль отправлен, нажат Enter")
-    wait_user("  Нажмите Enter, когда экран после пароля загрузится…")
-
-    answer = input("  Нужна двухфакторная аутентификация? (да/нет): ").strip().lower()
-    if answer in ("да", "д", "y", "yes"):
-        code = input("  Код 2FA: ").strip()
-        while not code:
-            code = input("  Код не может быть пустым, введите ещё раз: ").strip()
-        adb_input_text(adb, code)
-        press_enter(adb)
-        ok("Код 2FA отправлен, нажат Enter")
-    else:
-        info("2FA пропущена")
-    wait_user("  Нажмите Enter, когда вход завершится (или появится следующий экран)…")
+    wait_user("  Завершите вход на устройстве и нажмите Enter здесь…")
 
     accounts = google_accounts(adb)
     if accounts:
-        ok(f"На устройстве теперь есть Google-аккаунт(ы): {', '.join(accounts)}")
+        ok(f"На устройстве обнаружены Google-аккаунты: {', '.join(accounts)}")
         return True
     warn(
         "Аккаунт в dumpsys пока не виден. Возможно, вход ещё не завершён "
-        "(подтверждение на телефоне, капча и т.п.). Проверьте экран в VNC."
+        "в окне Android (VNC)."
     )
-    again = input("  Попробовать вход ещё раз? (да/нет): ").strip().lower()
+    again = input("  Открыть экран добавления аккаунта ещё раз? (да/нет): ").strip().lower()
     if again in ("да", "д", "y", "yes"):
-        return add_account_flow(adb, prefill_email=email)
+        return add_account_flow(adb)
     return False
 
 
-def choose_account(adb, prefill_email=""):
-    """Выбирает существующий аккаунт или запускает вход в новый. Возвращает True/False."""
+def choose_account(adb):
+    """Проверяет наличие аккаунта на устройстве без фиктивного выбора в Python."""
     accounts = google_accounts(adb)
     if not accounts:
-        info("Google-аккаунтов на устройстве нет — переходим к входу")
-        return add_account_flow(adb, prefill_email=prefill_email)
+        info("Google-аккаунтов на устройстве нет — открою экран входа на устройстве")
+        return add_account_flow(adb)
     print()
-    print("  Google-аккаунты на устройстве:")
+    print("  Google-аккаунты, обнаруженные на устройстве:")
     for i, acc in enumerate(accounts, 1):
-        print(f"  {i}. {acc}")
-    print(f"  {len(accounts) + 1}. Добавить новый аккаунт")
-    choice = input("  Выберите номер (или Enter — использовать первый): ").strip()
-    if not choice:
-        ok(f"Используем аккаунт: {accounts[0]}")
-        return True
-    try:
-        n = int(choice)
-    except ValueError:
-        warn("Не номер — считаем, что нужен новый аккаунт")
-        return add_account_flow(adb, prefill_email=prefill_email)
-    if 1 <= n <= len(accounts):
-        ok(f"Используем аккаунт: {accounts[n - 1]}")
-        return True
-    return add_account_flow(adb, prefill_email=prefill_email)
+        print(f"    {i}. {acc}")
+    if len(accounts) > 1:
+        warn(
+            "На устройстве несколько Google-аккаунтов! Скрипт НЕ переключает "
+            "активный платёжный аккаунт через ADB — убедитесь в самом приложении "
+            "Google One (аватар профиля сверху справа), что выбран нужный аккаунт."
+        )
+    choice = input("  Enter — продолжить (аккаунт проверяется в Google One), a — добавить новый на устройстве: ").strip().lower()
+    if choice in ("a", "add", "д", "+"):
+        return add_account_flow(adb)
+    return True
 
 
 # ── тарифы ───────────────────────────────────────────────────────────────────
 
 def load_plans():
-    """Возвращает список (plan_id, группа/примечание).
-
-    Сначала пробует взять GROUPS из main.py (import main), если не вышло —
-    парсит offers.txt (табы: key, sku, offer) рядом со скриптом.
-    """
+    """Возвращает полный список (plan_id, описание) в том же порядке, что и main.py."""
+    js_path = HERE / "frida.js"
     try:
         sys.path.insert(0, str(HERE))
-        from main import GROUPS  # noqa: F401
-        rows = []
-        for title, items in GROUPS:
-            for pid in items:
-                rows.append((pid, title))
-        if rows:
-            return rows
+        from main import flatten_menu, grouped_plans, parse_plans
+        if js_path.is_file():
+            plans = parse_plans(js_path.read_text(encoding="utf-8"))
+            if plans:
+                rows = []
+                for title, pid, spec in flatten_menu(grouped_plans(plans)):
+                    note = spec.get("note") or spec.get("offer") or spec.get("sku") or ""
+                    rows.append((pid, f"[{title}] {note}".strip()))
+                if rows:
+                    return rows
     except BaseException as e:
-        warn(f"Не удалось взять тарифы из main.py ({e}), читаю offers.txt")
+        warn(f"Не удалось прочитать каталог через main.py ({e}), читаю offers.txt")
     offers = HERE / "offers.txt"
     rows = []
     if offers.exists():
@@ -277,8 +233,10 @@ def load_plans():
             if not line.strip() or line.startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) >= 3:
-                rows.append((parts[0].strip(), parts[2].strip()))
+            if len(parts) >= 4 and parts[3].strip():
+                rows.append((parts[0].strip(), parts[3].strip()))
+            elif len(parts) >= 3:
+                rows.append((parts[0].strip(), parts[2].strip() or parts[1].strip()))
             elif len(parts) >= 1:
                 rows.append((parts[0].strip(), ""))
     return rows
@@ -378,7 +336,6 @@ def parse_args():
     p.add_argument("--adb", default="", help="Путь к adb (если не в PATH)")
     p.add_argument("--plan", default="", help="ID тарифа, чтобы пропустить меню (например pro_12m)")
     p.add_argument("--renew", action="store_true", help="Режим продления действующей подписки")
-    p.add_argument("--email", default="", help="Email для предзаполнения при входе")
     return p.parse_args()
 
 
@@ -431,10 +388,10 @@ def main():
         ok(f"Root доступен ({root_via} → uid=0)")
 
     # Аккаунт.
-    if not choose_account(adb, prefill_email=args.email):
-        warn("Вход в аккаунт не подтверждён. Продолжаю на свой страх и риск.")
+    if not choose_account(adb):
+        warn("Наличие Google-аккаунта не подтверждено. Продолжаю по решению пользователя.")
     else:
-        ok("Аккаунт готов")
+        ok("На устройстве есть Google-аккаунт (выбор профиля — в интерфейсе Google One)")
 
     # Google One.
     info("Открываю Google One…")

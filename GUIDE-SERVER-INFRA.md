@@ -1,10 +1,10 @@
-# Серверная инфраструктура (`debian-nested`, KVM, DDNS, мониторинг)
+# Серверная инфраструктура (`vm-host`, KVM, DDNS, мониторинг)
 
 ## 1. Сетевая архитектура
-- **Хост:** Google Cloud VM (`debian-nested`), внешний IP эфемерный.
-- **Домены в Cloudflare (зона `avkus.bond`, оба A-записи, строго DNS-only / серое облако):**
-  - `debian-nested.avkus.bond` — вход по SSH (порт `2222`) и RDP (`3390`)
-  - `adb.avkus.bond` — запасная/сервисная A-запись
+- **Хост:** облачная VM с nested KVM (`vm-host`), внешний IP эфемерный.
+- **Домены в Cloudflare (зона `example.com`, оба A-записи, строго DNS-only / серое облако):**
+  - `vm-host.example.com` — вход по SSH (порт `2222`) и RDP (`3390`)
+  - `adb.example.com` — запасная/сервисная A-запись
 - **Доступ к ВМ снаружи:** DNAT и порт `5555` снаружи **отключены** (правила `iptables` удалены). Всё общение с гостевыми ВМ (ADB и VNC) с Windows и Mac идёт через **`tunnel.py`** поверх SSH (порт `2222`).
 - **Сеть ВМ:** libvirt NAT `default` (`virbr0`, `10.166.0.0/24`).
 
@@ -64,24 +64,24 @@ sudo chmod 444 /var/lib/libvirt/images/blisstemplate.qcow2
 
 ## 4. Автообновление DNS (`update_dns.py`) и сторож KVM (`vm_watch.py`)
 
-Оба скрипта запущены в `crontab` пользователя `avkuska` каждые 5 минут (симлинки в `/home/avkuska/bin/`):
+Оба скрипта запущены в `crontab` пользователя `vmuser` каждые 5 минут (симлинки в `/home/vmuser/bin/`):
 
 ```cron
-*/5 * * * * /home/avkuska/bin/update_dns.py >> /home/avkuska/frida/update_dns.log 2>&1
-*/5 * * * * /home/avkuska/bin/vm_watch.py >> /home/avkuska/frida/vm_watch.log 2>&1
+*/5 * * * * /home/vmuser/bin/update_dns.py >> /home/vmuser/frida/update_dns.log 2>&1
+*/5 * * * * /home/vmuser/bin/vm_watch.py >> /home/vmuser/frida/vm_watch.log 2>&1
 ```
 
 ### Что делает `update_dns.py`
 1. Определяет внешний IP (`metadata.google.internal` → `api.ipify.org` → `ifconfig.me`).
 2. Сравнивает с `state/dns_last_ip.txt`. Если IP прежний — выходит, не дёргая API.
-3. Если IP сменился — обновляет обе A-записи (`adb.avkus.bond` и `debian-nested.avkus.bond`, `proxied: false`), сохраняет state и отправляет уведомление в Telegram.
+3. Если IP сменился — обновляет обе A-записи (`adb.example.com` и `vm-host.example.com`, `proxied: false`), сохраняет state и отправляет уведомление в Telegram.
 
 ### Что делает `vm_watch.py`
 1. Опрашивает системный libvirt (`virsh -c qemu:///system`) и аренды DHCP (`/var/lib/libvirt/dnsmasq/virbr0.status`), собирает состояние всех ВМ, их внутренние IP и реальные порты VNC/SPICE.
-2. Сравнивает со снимком `state/vm_state.json`. При изменениях (старт/стоп ВМ, смена внутреннего IP, VNC-порта или внешнего IP хоста) отправляет сводку в Telegram.
-3. В режиме `--inventory` отдаёт JSON для `tunnel.py` (вызывается по SSH с клиентского ПК).
+2. Отдельно хранит последний успешный опрос, закреплённые слоты портов и последний доставленный в Telegram снимок в `state/vm_state.json`.
+3. В режиме `--inventory` отдаёт JSON (включая `port_slots`) для `tunnel.py`.
 
-### Конфигурация на сервере (`/home/avkuska/frida/config.py`, права `600`, в `.gitignore`)
+### Конфигурация на сервере (`/home/vmuser/frida/config.py`, права `600`, в `.gitignore`)
 - Cloudflare: `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_DNS_RECORD_ID`, `CF_RECORD_NAME`, `CF_DNS_RECORD_ID_SSH`, `CF_RECORD_NAME_SSH`.
 - Telegram: `TELEGRAM_BOT_TOKEN` (от `@BotFather`, не забудьте нажать `/start` в чате с ботом), `TELEGRAM_CHAT_ID`.
-- Опционально для уведомлений `vm_watch.py`: `VNC_PASSWORD` (сам `virsh` пароль не читает).
+- Пароль VNC никогда не хранится в `config.py` и не пересылается в Telegram или логи.

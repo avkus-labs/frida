@@ -109,10 +109,10 @@ if ! adb -s "$SERIAL" shell ls /data/local/tmp/module_521.apk >/dev/null 2>&1; t
   echo "ВНИМАНИЕ: на устройстве нет /data/local/tmp/module_521.apk. probe не найдёт BillingClient. Запусти один раз main.py — он сам его докинет — или: adb -s $SERIAL push module_521.apk /data/local/tmp/ (файл распаковывается из module_b64.py)." >&2
 fi
 
-# Видит ли frida это устройство вообще (emulator-5554 — по adb, не USB).
+# Видит ли frida это устройство вообще.
 if command -v frida-ls-devices >/dev/null 2>&1; then
-  if ! frida-ls-devices 2>/dev/null | grep -q "$SERIAL"; then
-    echo "ВНИМАНИЕ: frida-ls-devices не показывает $SERIAL. frida -U может не найти устройство." >&2
+  if ! frida-ls-devices 2>/dev/null | grep -Fq "$SERIAL"; then
+    echo "ВНИМАНИЕ: frida-ls-devices не показывает $SERIAL. frida -D \"$SERIAL\" может не найти устройство." >&2
   fi
 fi
 
@@ -172,13 +172,21 @@ while IFS="$(printf '\t')" read -r key sku offer || [ -n "$key" ]; do
     [ -n "$G1_PID" ] || { echo "[$i/$TOTAL] $key -> error (приложение не запустилось)"; ERRORS=$((ERRORS + 1)); continue; }
   fi
 
+  # Валидация sku и offer перед подстановкой в JS-шаблон (защита от инъекции в sed/JS).
+  if ! printf '%s' "$sku" | grep -Eq '^[A-Za-z0-9._-]+$' || ! printf '%s' "$offer" | grep -Eq '^[A-Za-z0-9._-]*$'; then
+    echo "[$i/$TOTAL] ($pct%) $key  sku=$sku offer=$offer_disp -> error (недопустимые символы в sku/offer)" >&2
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$sku" "$offer" "error" "" "" >> "$RESULTS"
+    ERRORS=$((ERRORS + 1))
+    continue
+  fi
+
   # Подстановка sku/offer в шаблон probe-single.js.
   probe_js="$TMPDIR_SCAN/probe.js"
   sed -e "s/__SKU__/$sku/g" -e "s/__OFFER__/$offer/g" "$TEMPLATE" > "$probe_js"
   out_log="$TMPDIR_SCAN/out.log"
   : > "$out_log"
 
-  frida -U -p "$G1_PID" -l "$probe_js" --no-pause > "$out_log" 2>&1 &
+  frida -D "$SERIAL" -p "$G1_PID" -l "$probe_js" --no-pause > "$out_log" 2>&1 &
   FRIDA_PID=$!
   # Ждём строку RESULT (до TIMEOUT секунд), потом убиваем frida.
   waited=0

@@ -4,14 +4,14 @@
 
 ### Шаг 1. Создать и запустить нужный клон на сервере
 ```bash
-ssh -p 2222 avkuska@debian-nested.avkus.bond "sudo new_bliss.sh bliss-01"
+ssh -p 2222 vmuser@vm-host.example.com "sudo new_bliss.sh bliss-01"
 ```
-Сохраните **8-символьный пароль VNC** из вывода. Подождите ~15–20 секунд, пока загрузится Android.
+Сохраните **8-символьный пароль VNC** из вывода локально (не пересылайте его в чаты и логи). Подождите ~15–20 секунд, пока загрузится Android.
 
 ### Шаг 2. Поднять автоматический туннель (`tunnel.py`) — Окно 1
-Скрипт сам спросит `vm_watch.py --inventory` на `debian-nested`, найдёт все запущенные ВМ и поднимет пробросы:
-- для 1-й ВМ: `ADB 127.0.0.1:15551` и `VNC 127.0.0.1:15901`
-- для 2-й ВМ: `ADB 127.0.0.1:15552` и `VNC 127.0.0.1:15902` и т.д.
+Скрипт сам спросит `vm_watch.py --inventory` на хосте, сопоставит ВМ с закреплёнными слотами портов в state-файле и поднимет пробросы для запущенных ВМ:
+- слот 0: `ADB 127.0.0.1:15551` и `VNC 127.0.0.1:15901`
+- слот 1: `ADB 127.0.0.1:15552` и `VNC 127.0.0.1:15902` и т.д. (выключение соседней ВМ не сдвигает чужие порты)
 
 ```bash
 # На Windows (в E:\frida) или на macOS (в ~/frida):
@@ -58,7 +58,7 @@ python main.py --serial 127.0.0.1:15552
 1. Закройте `tunnel.py` (`Ctrl + C`).
 2. Удалите клон на сервере:
    ```bash
-   ssh -p 2222 avkuska@debian-nested.avkus.bond "sudo virsh destroy bliss-01; sudo virsh undefine bliss-01 --remove-all-storage"
+   ssh -p 2222 vmuser@vm-host.example.com "sudo virsh destroy bliss-01; sudo virsh undefine bliss-01 --remove-all-storage"
    ```
 
 ---
@@ -73,4 +73,4 @@ python main.py --serial 127.0.0.1:15552
 | Промо «Want to pay with cash?» | Информационное окно Play для региона US | Нажать `OK` |
 | `Telegram 401 Unauthorized` в логах `update_dns` / `vm_watch` | Неверный `TELEGRAM_BOT_TOKEN` в `config.py` на сервере | Получить/перевыпустить токен у `@BotFather`, прописать в `config.py` на `debian-nested` и нажать `/start` в чате с ботом |
 | Ошибка GitHub `GH001: Large files detected` при `git push` | В коммит попал распакованный `assets/frida-server-*` | `git reset --soft origin/main && git reset HEAD -- assets/` и перекоммитить без `assets/` |
-| Проверить состояние всех ВМ, IP и VNC | — | `python tunnel.py --dry-run` или `ssh -p 2222 avkuska@debian-nested.avkus.bond "python3 /home/avkuska/frida/vm_watch.py --inventory"` |
+| Проверить состояние всех ВМ, IP и VNC | — | `python tunnel.py --dry-run` или `ssh -p 2222 vmuser@vm-host.example.com "python3 ~/frida/vm_watch.py --inventory"` |

@@ -38,28 +38,17 @@ python main.py --serial emulator-5560    # Явно выбрать устрой�
 
 Полный каталог всех тарифов — [SKU-LIST.ru.md](SKU-LIST.ru.md): 109 записей, 94 уникальных SKU, таблицы по тарифам, отдельный список бесплатных и списки для копирования. Сгенерирован из `frida.js`, так что со скриптом не расходится.
 
-## Главный затык: root, или почему frida-server опять не root
+## Root и проверка целостности
 
-Вот это мы забывали раз за разом, поэтому пишу большими буквами.
+Для attach к процессу Google One сервер `frida-server` обязан работать от `root` (`uid=0`), иначе возвращается `PermissionDeniedError`.
 
-`main.py` сам запускает `frida-server`, но запускает его как `shell`, а не как root. А attach к Google One без root — `PermissionDeniedError`, и всё тут.
+Как `main.py` подготавливает устройство сейчас:
 
-Правильный порядок такой, и никак иначе:
+1. Проверяет `uid=0` в оболочке ADB; если ещё не root — автоматически вызывает `adb root` (на userdebug-сборках типа Bliss OS этого достаточно) или ищет `su`.
+2. **До любого запуска** проверяет SHA-256 файлов `/data/local/tmp/module_521.apk` и `/data/local/tmp/frida-server` на устройстве (даже `--version` не вызывается на непроверенном файле).
+3. Если файл отсутствует или его хеш отличается от проверенного локального образца — копирует файл заново, проверяет код возврата `adb push`, повторно сверяет SHA-256 и запускает `frida-server` от `root`.
 
-1. Запусти `main.py` первый раз. Он упадёт с `PermissionDeniedError`. Это нормально, не паникуй.
-2. Переведи adbd в root и запусти сервер от root (сборка userdebug — `su` не нужен):
-   ```bash
-   adb -s <serial> root
-   adb -s <serial> shell 'killall -9 frida-server'
-   adb -s <serial> shell '/data/local/tmp/frida-server -D &'
-   adb -s <serial> shell ps -A | grep frida-server
-   ```
-   В первой колонке должно быть `root`, а не `shell`.
-3. Запусти `main.py` второй раз, с тем же планом. Второй раз он увидит, что сервер уже запущен от root, и не будет его перезапускать — attach пройдёт.
-
-Проверка до запуска не помогает: `main.py` всё равно запустит свой, shell. Только так, в два захода.
-
-Проверка: после `adb root` команда `adb shell id` должна дать `uid=0(root)`. Если `adb root` отвечает `adbd cannot run as root in production builds` — сборка не userdebug, это не наш случай (Bliss 15.9.2 — userdebug).
+Если используется сборка, где `adb root` отвечает `adbd cannot run as root in production builds` и нет `su` (Magisk/KernelSU), скрипт остановится с понятной ошибкой.
 
 ## Новая подписка и продление
 
@@ -80,7 +69,7 @@ var STACK = true;  // Продление существующей подписк
 frida -U -p <pid Google One> -l probe-one.js --no-pause
 ```
 
-Нажми Upgrade в Google One и смотри строки `[probe] offer product=... offerId=...`. Полный токен в лог не пишется, только первые 12 символов — так спокойнее.
+Нажми Upgrade в Google One и смотри строки `[probe] offer product=... offerId=...`. Токены в лог не пишутся.
 
 А если прогнать весь список разом — есть `scan-offers.sh`. Он берёт все 109 офферов из `offers.txt`, по одному подставляет их в `probe-single.js` и спрашивает у Play только через `queryProductDetailsAsync`, с задержкой 5 секунд между офферами и прогрессом в терминале (`[12/109] ... -> live/missing/error`). Экран оформления не открывается и ничего не покупается — это анализ, а не оформление. Итог — в `scan-results-<дата>.log`.
 

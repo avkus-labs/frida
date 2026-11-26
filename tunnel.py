@@ -1,47 +1,48 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-tunnel.py — динамический SSH-туннель к KVM-машинам на debian-nested.
+tunnel.py — SSH-туннель к KVM-машинам со стабильной привязкой портов.
 
 Что делает:
-  1. По SSH спрашивает у хоста, какие VM запущены и какие у них
-     внутренние IP и VNC-порты (vm_watch.py --inventory).
-  2. Строит SSH-туннель: на каждую запущенную VM — свой локальный порт
-     для ADB и свой для VNC. Сколько VM работает, столько пар портов:
-     одна — одна пара, две — две, три — три.
-  3. Держит туннель открытым (ssh работает на переднем плане),
-     пока окно терминала не закроют или не нажмут Ctrl+C.
+  1. По SSH спрашивает у хоста снимок всех VM (`vm_watch.py --inventory`).
+  2. Закрепляет за каждой VM постоянный индекс слота в state-файле
+     (`state/tunnel_ports.json` + `port_slots` из инвентаря хоста):
+     выключение или удаление соседней VM НЕ сдвигает порты остальных машин.
+  3. Строит пробросы `-L` только для запущенных VM с доступным ADB/VNC
+     и держит ssh-сессию на переднем плане до Ctrl+C.
 
-Порты (локальные, на твоём компьютере):
-  - ADB: 15551, 15552, 15553, ... (по порядку имён VM)
-  - VNC: 15901, 15902, 15903, ... (тот же порядок)
-  Пример: bliss-01 → ADB 127.0.0.1:15551, VNC 127.0.0.1:15901.
+Локальные порты (по постоянному слоту VM):
+  - ADB: 15551 + slot
+  - VNC: 15901 + slot
 
-Использование (Windows / macOS / Linux, нужен ssh в PATH):
-  python3 tunnel.py
-  python3 tunnel.py --dry-run        # только показать, что было бы запущено
-  python3 tunnel.py --user gru_avkus # другой SSH-пользователь
-
-После запуска в другой вкладке:
-  adb connect 127.0.0.1:15551   # bliss-01 (порт из сводки)
-  VNC-клиент → 127.0.0.1:15901  # экран bliss-01
-
-Только стандартная библиотека. Живёт во frida рядом с vm_watch.py.
+Только стандартная библиотека.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import shlex
 import subprocess
 import sys
+from pathlib import Path
 
-DEFAULT_HOST = "debian-nested.avkus.bond"
+HERE = Path(__file__).resolve().parent
+
+DEFAULT_HOST = "vm-host.example.com"
 DEFAULT_PORT = 2222
-DEFAULT_USER = "avkuska"
+DEFAULT_USER = "vmuser"
 DEFAULT_ADB_BASE = 15551
 DEFAULT_VNC_BASE = 15901
-INVENTORY_CMD = "python3 /home/avkuska/frida/vm_watch.py --inventory"
+DEFAULT_INVENTORY_CMD = "python3 ~/frida/vm_watch.py --inventory"
+
+DEFAULT_CONFIG = {
+    "SSH_HOST": DEFAULT_HOST,
+    "SSH_PORT": DEFAULT_PORT,
+    "SSH_USER": DEFAULT_USER,
+    "SSH_INVENTORY_CMD": DEFAULT_INVENTORY_CMD,
+}
 
 
 def info(msg):
@@ -60,9 +61,34 @@ def fail(msg):
     print(f"[x] {msg}", flush=True)
 
 
+def load_config():
+    cfg = dict(DEFAULT_CONFIG)
+    cfg_path = HERE / "config.py"
+    if not cfg_path.exists():
+        return cfg
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("frida_config", cfg_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for key in cfg:
+            if hasattr(mod, key):
+                cfg[key] = getattr(mod, key)
+    except Exception as e:
+        warn(f"Не удалось прочитать config.py ({e}), используются значения по умолчанию")
+    return cfg
+
+
+def parse_ssh_opts(raw_opts):
+    """Разбирает строку опций SSH с учётом кавычек."""
+    if not raw_opts:
+        return []
+    return shlex.split(raw_opts, posix=(os.name != "nt"))
+
+
 def run_ssh_query(ssh_bin, ssh_opts, host, port, user, remote_cmd):
     """Выполняет команду на хосте по SSH. Возвращает (rc, stdout, stderr)."""
-    cmd = [ssh_bin] + ssh_opts + [
+    cmd = [ssh_bin] + list(ssh_opts) + [
         "-p", str(port),
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=30",
@@ -76,33 +102,109 @@ def run_ssh_query(ssh_bin, ssh_opts, host, port, user, remote_cmd):
         return 1, "", str(e)
 
 
-def get_inventory(ssh_bin, ssh_opts, host, port, user):
+def get_inventory(ssh_bin, ssh_opts, host, port, user, inventory_cmd=DEFAULT_INVENTORY_CMD):
     """Спрашивает у хоста снимок VM. Возвращает dict или None при ошибке."""
-    rc, out, err = run_ssh_query(ssh_bin, ssh_opts, host, port, user, INVENTORY_CMD)
+    rc, out, err = run_ssh_query(ssh_bin, ssh_opts, host, port, user, inventory_cmd)
     if rc != 0:
         fail(f"Не удалось опросить хост {host} (ssh rc={rc})")
         if err.strip():
             print(err.strip(), flush=True)
         return None
     try:
-        return json.loads(out.strip())
+        data = json.loads(out.strip())
     except Exception as e:
         fail(f"Хост вернул не JSON ({e}): {out.strip()[:300]}")
         return None
+    if not isinstance(data, dict) or not isinstance(data.get("vms"), dict):
+        fail("Ответ хоста не содержит корректного словаря 'vms'")
+        return None
+    return data
 
 
-def build_forwards(inventory, adb_base, vnc_base):
-    """Строит список пробросов. Возвращает (forwards, mapping).
+def read_port_slots(state_file):
+    if not state_file:
+        return {}
+    try:
+        raw = json.loads(Path(state_file).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        warn(f"Не удалось прочитать таблицу портов {state_file}: {e}")
+        return {}
+    slots = raw.get("port_slots") if isinstance(raw, dict) and "port_slots" in raw else raw
+    if not isinstance(slots, dict):
+        return {}
+    clean = {}
+    for k, v in slots.items():
+        if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            clean[k] = v
+    return clean
+
+
+def write_port_slots(state_file, slots):
+    if not state_file:
+        return
+    path = Path(state_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps({"port_slots": slots}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def resolve_port_slots(vms, remote_slots=None, saved_slots=None):
+    """Объединяет сохранённые и серверные слоты без переназначения занятых индексов."""
+    slots = {}
+    used_indices = set()
+
+    for name, idx in (saved_slots or {}).items():
+        if isinstance(name, str) and isinstance(idx, int) and not isinstance(idx, bool) and idx >= 0:
+            if idx not in used_indices:
+                slots[name] = idx
+                used_indices.add(idx)
+
+    for name, idx in sorted((remote_slots or {}).items()):
+        if name in slots:
+            continue
+        if isinstance(name, str) and isinstance(idx, int) and not isinstance(idx, bool) and idx >= 0:
+            if idx not in used_indices:
+                slots[name] = idx
+                used_indices.add(idx)
+
+    next_idx = 0
+    for name in sorted(vms or {}):
+        if name in slots:
+            continue
+        while next_idx in used_indices:
+            next_idx += 1
+        slots[name] = next_idx
+        used_indices.add(next_idx)
+        next_idx += 1
+
+    return slots
+
+
+def build_forwards(inventory, adb_base, vnc_base, state_file=None, persist=True):
+    """Строит список пробросов со стабильными портами за каждой VM.
 
     forwards: список (local_port, target_host, target_port, service, vm_name)
     mapping: список строк для сводки.
     """
     vms = (inventory or {}).get("vms") or {}
+    remote_slots = (inventory or {}).get("port_slots") or {}
+    saved_slots = read_port_slots(state_file)
+    slots = resolve_port_slots(vms, remote_slots=remote_slots, saved_slots=saved_slots)
+
+    if state_file and persist and slots != saved_slots:
+        write_port_slots(state_file, slots)
+
     forwards = []
     mapping = []
-    index = 0
-    for name in sorted(vms):
+    for name in sorted(vms, key=lambda n: (slots[n], n)):
         vm = vms[name]
+        slot = slots[name]
         if vm.get("state") != "running":
             continue
         ips = vm.get("ips") or []
@@ -113,31 +215,38 @@ def build_forwards(inventory, adb_base, vnc_base):
         has_vnc = bool(gtype == "vnc" and gport)
         if not has_adb and not has_vnc:
             continue
-        adb_local = adb_base + index
-        vnc_local = vnc_base + index
-        index += 1
+        adb_local = adb_base + slot
+        vnc_local = vnc_base + slot
         if has_adb:
             forwards.append((adb_local, ips[0], 5555, "ADB", name))
             mapping.append(
-                f"  {name}: ADB  127.0.0.1:{adb_local}  →  {ips[0]}:5555"
+                f"  {name} (слот {slot}): ADB  127.0.0.1:{adb_local}  →  {ips[0]}:5555"
             )
         if has_vnc:
             forwards.append((vnc_local, "127.0.0.1", gport, "VNC", name))
             mapping.append(
-                f"  {name}: VNC  127.0.0.1:{vnc_local}  →  хост:{gport}"
+                f"  {name} (слот {slot}): VNC  127.0.0.1:{vnc_local}  →  хост:{gport}"
             )
     return forwards, mapping
 
 
-def parse_args():
+def parse_args(cfg=None):
+    cfg = cfg or DEFAULT_CONFIG
+    def_host = os.environ.get("SSH_HOST") or cfg.get("SSH_HOST") or DEFAULT_HOST
+    def_port = int(os.environ.get("SSH_PORT") or cfg.get("SSH_PORT") or DEFAULT_PORT)
+    def_user = os.environ.get("SSH_USER") or cfg.get("SSH_USER") or DEFAULT_USER
+    def_cmd = os.environ.get("SSH_INVENTORY_CMD") or cfg.get("SSH_INVENTORY_CMD") or DEFAULT_INVENTORY_CMD
+
     p = argparse.ArgumentParser(
-        description="Динамический SSH-туннель к запущенным KVM-машинам (ADB+VNC)."
+        description="SSH-туннель к запущенным KVM-машинам со стабильными портами (ADB+VNC)."
     )
-    p.add_argument("--host", default=DEFAULT_HOST, help=f"SSH-хост (по умолчанию {DEFAULT_HOST})")
-    p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"SSH-порт (по умолчанию {DEFAULT_PORT})")
-    p.add_argument("--user", default=DEFAULT_USER, help=f"SSH-пользователь (по умолчанию {DEFAULT_USER})")
+    p.add_argument("--host", default=def_host, help=f"SSH-хост (по умолчанию {def_host})")
+    p.add_argument("--port", type=int, default=def_port, help=f"SSH-порт (по умолчанию {def_port})")
+    p.add_argument("--user", default=def_user, help=f"SSH-пользователь (по умолчанию {def_user})")
+    p.add_argument("--inventory-cmd", default=def_cmd, help="Команда получения JSON-инвентаря на хосте")
+    p.add_argument("--ports-file", default="", help="Файл закрепления портов за VM (по умолчанию state/tunnel_ports.json)")
     p.add_argument("--ssh", default="ssh", help="Путь к ssh (по умолчанию ssh из PATH)")
-    p.add_argument("--ssh-opts", default="", help="Доп. опции ssh одной строкой, например: -F C:/Users/andre/.ssh/config -o StrictHostKeyChecking=accept-new")
+    p.add_argument("--ssh-opts", default="", help="Доп. опции ssh строкой, например: -F ~/.ssh/config -o StrictHostKeyChecking=accept-new")
     p.add_argument("--adb-base", type=int, default=DEFAULT_ADB_BASE, help=f"Первый локальный порт ADB (по умолчанию {DEFAULT_ADB_BASE})")
     p.add_argument("--vnc-base", type=int, default=DEFAULT_VNC_BASE, help=f"Первый локальный порт VNC (по умолчанию {DEFAULT_VNC_BASE})")
     p.add_argument("--no-adb", action="store_true", help="Не пробрасывать ADB, только VNC")
@@ -147,18 +256,29 @@ def parse_args():
 
 
 def main():
-    args = parse_args()
+    cfg = load_config()
+    args = parse_args(cfg)
+    ssh_opts = parse_ssh_opts(args.ssh_opts)
+    ports_file = args.ports_file or str(HERE / "state" / "tunnel_ports.json")
 
     print("=" * 64)
-    print("  tunnel.py — SSH-туннель к debian-nested")
+    print(f"  tunnel.py — SSH-туннель к {args.host}")
     print("=" * 64)
 
-    inventory = get_inventory(args.ssh, args.ssh_opts.split(), args.host, args.port, args.user)
+    inventory = get_inventory(
+        args.ssh, ssh_opts, args.host, args.port, args.user, args.inventory_cmd
+    )
     if inventory is None:
         return 1
     info(f"Внешний IP хоста: {inventory.get('external_ip') or 'неизвестен'}")
 
-    forwards, mapping = build_forwards(inventory, args.adb_base, args.vnc_base)
+    forwards, mapping = build_forwards(
+        inventory,
+        args.adb_base,
+        args.vnc_base,
+        state_file=ports_file,
+        persist=(not args.dry_run),
+    )
     if args.no_adb:
         forwards = [f for f in forwards if f[3] != "ADB"]
         mapping = [m for m in mapping if ": ADB " not in m]
@@ -170,7 +290,7 @@ def main():
         return 0
 
     print()
-    print("  Пробросы:")
+    print("  Пробросы (порты закреплены за именами VM):")
     for line in mapping:
         print(line)
     print()
@@ -182,18 +302,18 @@ def main():
         if service == "VNC":
             print(f"    VNC → 127.0.0.1:{local}  # {vm}")
 
-    ssh_cmd = [args.ssh] + args.ssh_opts.split() + ["-p", str(args.port)]
+    ssh_cmd = [args.ssh] + ssh_opts + ["-p", str(args.port)]
     for local, t_host, t_port, _service, _vm in forwards:
         ssh_cmd += ["-L", f"{local}:{t_host}:{t_port}"]
     ssh_cmd += [f"{args.user}@{args.host}"]
 
     print()
     print("  Команда:")
-    print("  " + " ".join(ssh_cmd))
+    print("  " + " ".join(shlex.quote(part) for part in ssh_cmd))
     print()
 
     if args.dry_run:
-        print("[dry-run] Туннель не запускался")
+        print("[dry-run] Туннель не запускался, таблица портов не менялась")
         return 0
 
     ok("Поднимаю туннель (Ctrl+C — закрыть)…")

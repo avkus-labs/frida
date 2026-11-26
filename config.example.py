@@ -32,16 +32,23 @@ GOOGLE_ONE_APK_URL = ""
 
 # Папка кеша скачанных APK (относительно папки скриптов).
 DOWNLOADS_DIR = "downloads"
-# VNC-пароль для vm_watch.py (virsh пароль не отдаёт, поэтому он
-# берётся только отсюда; если пусто — в сообщении будет пометка).
-# Переменная окружения VNC_PASSWORD имеет приоритет над значением здесь.
-VNC_PASSWORD = ""
 
-# Telegram (уведомление update_dns.py при смене IP).
+# Ожидаемые SHA-256 для скачиваемых/локальных APK (рекомендуется задать).
+CHROME_APK_SHA256 = ""
+GOOGLE_ONE_APK_SHA256 = ""
+
+# Параметры SSH-хоста с KVM (для tunnel.py).
+SSH_HOST = "vm-host.example.com"
+SSH_PORT = 2222
+SSH_USER = "vmuser"
+SSH_INVENTORY_CMD = "python3 ~/frida/vm_watch.py --inventory"
+
+# Telegram (уведомление update_dns.py и vm_watch.py).
 # Переменные окружения TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID имеют приоритет
 # над значениями здесь. Chat ID личного чата = ID пользователя.
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
+
 # Вторая запись (SSH, та же зона). Необязательно.
 CF_DNS_RECORD_ID_SSH = ""
-CF_RECORD_NAME_SSH = "debian-nested.avkus.bond"
+CF_RECORD_NAME_SSH = "vm-host.example.com"

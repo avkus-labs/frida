@@ -14,8 +14,8 @@ update_dns.py — динамический DNS для доменов debian-nest
      записывает новый IP в state-файл.
 
 Обновляет две записи (обе DNS-only, без прокси):
-  - ADB:  CF_RECORD_NAME (например adb.avkus.bond)
-  - SSH:  CF_RECORD_NAME_SSH (например debian-nested.avkus.bond)
+  - ADB:  CF_RECORD_NAME (например adb.example.com)
+  - SSH:  CF_RECORD_NAME_SSH (например vm-host.example.com)
 Вторая запись необязательна: если CF_DNS_RECORD_ID_SSH / CF_RECORD_NAME_SSH
 не заданы, обновляется только первая.
 
@@ -33,6 +33,7 @@ config.py. Если Telegram не настроен — просто пропус
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import sys
@@ -107,14 +108,22 @@ def fetch_text(url, headers=None, timeout=5):
         return resp.read().decode("utf-8", "replace").strip()
 
 
+def is_valid_ipv4(value):
+    try:
+        ipaddress.IPv4Address((value or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
 def get_external_ip():
-    """Возвращает внешний IP или '' если узнать не удалось."""
+    """Возвращает внешний IPv4 или '' если узнать не удалось."""
     # 1. GCP metadata server (работает только на VM в Google Cloud).
     try:
         ip = fetch_text(
             GCP_METADATA_URL, headers={"Metadata-Flavor": "Google"}, timeout=5
         )
-        if ip:
+        if is_valid_ipv4(ip):
             info(f"Внешний IP из GCP metadata: {ip}")
             return ip
     except Exception as e:
@@ -123,7 +132,7 @@ def get_external_ip():
     for url in (IPIFY_URL, IFCONFIG_URL):
         try:
             ip = fetch_text(url, timeout=10)
-            if ip and all(c.isdigit() or c == "." for c in ip):
+            if is_valid_ipv4(ip):
                 info(f"Внешний IP из {url}: {ip}")
                 return ip
         except Exception as e:

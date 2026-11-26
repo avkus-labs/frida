@@ -22,8 +22,7 @@ var TARGET_SKU = "__SKU__";
 var TARGET_OFFER = "__OFFER__";
 
 var DEX_PATHS = [
-  "/data/local/tmp/module_521.apk",
-  "/data/local/tmp/billing.apk"
+  "/data/local/tmp/module_521.apk"
 ];
 
 var dexLoader = null;

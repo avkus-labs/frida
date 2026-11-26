@@ -127,8 +127,7 @@ var PLANS = {
 
 var STACK_MODE = 5; // Для продления используется CHARGE_FULL_PRICE
 var DEX_PATHS = [
-  "/data/local/tmp/module_521.apk",
-  "/data/local/tmp/billing.apk"
+  "/data/local/tmp/module_521.apk"
 ];
 
 var dexLoader = null;
@@ -204,25 +203,33 @@ function planOf(name) {
   return { name: name, sku: p.sku, offer: p.offer, note: p.note };
 }
 
-function isG1Sub(prods) {
+function isG1MainSub(prods) {
   var s = String(prods || "");
-  return s.indexOf("g1.") >= 0;
+  if (s.indexOf("g1.") < 0) return false;
+  if (
+    s.indexOf("_add_on") >= 0 ||
+    s.indexOf("youtube_premium") >= 0 ||
+    s.indexOf("home_premium") >= 0 ||
+    s.indexOf("health_premium") >= 0
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function pickOldToken(list) {
-  var any = "", prefer = "";
+  var prefer = "";
   if (!list) return "";
   var Purchase = Java.use("com.android.billingclient.api.Purchase");
   for (var i = 0; i < list.size(); i++) {
     var pu = Java.cast(list.get(i), Purchase);
     var prods = String(pu.getProducts());
     var t = String(pu.getPurchaseToken() || "");
-    log("old_purchase", { i: i, products: prods, head: t.slice(0, 16) });
-    if (!t) continue;
-    if (!any) any = t;
-    if (isG1Sub(prods)) prefer = t;
+    var matched = !!(t && isG1MainSub(prods));
+    log("old_purchase", { i: i, products: prods, matched: matched });
+    if (matched) prefer = t;
   }
-  return prefer || any;
+  return prefer;
 }
 
 function loadBilling() {
@@ -317,7 +324,7 @@ function applyStackParams(builder, oldTok) {
   }
   log("mode_applied", { mode: STACK_MODE, ok: modeSet });
   builder = builder.setSubscriptionUpdateParams(sb.setOldPurchaseToken(String(oldTok)).build());
-  log("stack_mode", { mode: STACK_MODE, old: String(oldTok).slice(0, 16) });
+  log("stack_mode", { mode: STACK_MODE, has_old_token: !!oldTok });
   return builder;
 }
 
@@ -378,57 +385,35 @@ function launchFlow(hit, hitOffer, add, addOffer, oldTok, spec) {
   Handler.$new(Looper.getMainLooper()).post(hold(R.$new()));
 }
 
-function shOut(argv) {
-  L(null);
-  var ArrayList = Java.use("java.util.ArrayList");
-  var args = ArrayList.$new();
-  for (var i = 0; i < argv.length; i++) args.add(argv[i]);
-  var pb = Java.use("java.lang.ProcessBuilder").$new(args);
-  pb.redirectErrorStream(true);
-  var proc = pb.start();
-  var br = Java.use("java.io.BufferedReader").$new(Java.use("java.io.InputStreamReader").$new(proc.getInputStream()));
-  var out = "";
-  var line;
-  while (true) {
-    line = br.readLine();
-    if (line === null) break;
-    out += String(line) + "\n";
-  }
-  proc.waitFor();
-  L(dexLoader);
-  return out;
-}
-
-function tokenFromPlayDb() {
-  try {
-    L(null);
-    var File = Java.use("java.io.File");
-    var suBin = File.$new("/system/bin/su").exists() ? "/system/bin/su" : (File.$new("/system/xbin/su").exists() ? "/system/xbin/su" : "");
-    L(dexLoader);
-    if (!suBin) return "";
-    var sql = "select inapp_purchase_data from ownership where doc_id like '%g1.2tb.ai%' or doc_id like '%g1.play.2tb.ai%' order by subs_valid_until_time desc limit 5;";
-    var out = shOut([suBin, "0", "sqlite3", "/data/data/com.android.vending/databases/library.db", sql]);
-    var m = out.match(/"purchaseToken"\s*:\s*"([^"]+)"/);
-    if (m && m[1]) {
-      log("old_purchase", { i: 0, products: "library.db", head: m[1].slice(0, 16) });
-      return m[1];
-    }
-    log("library_miss", { n: out.length });
-  } catch (e) { log("library_err", { m: clip(e) }); }
-  return "";
+function requestHostDbToken(cb) {
+  var done = false;
+  var timer = setTimeout(function () {
+    if (done) return;
+    done = true;
+    log("db_token_timeout", {});
+    onJava(function () { cb(""); });
+  }, 5000);
+  recv("db_token", function (msg) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    var p = (msg && msg.payload) ? msg.payload : (msg || {});
+    var tok = String(p.token || "");
+    log("db_token_result", { found: !!tok, sku: String(p.sku || "") });
+    onJava(function () { cb(tok); });
+  });
+  log("need_db_token", {});
 }
 
 function queryPurchasesThen(cb) {
   L(dexLoader);
-  var dbTok = tokenFromPlayDb();
-  if (dbTok) { cb(dbTok); return; }
-  try {
-    var pr = clientRef.queryPurchases("subs");
-    var list = pr.getPurchasesList();
-    log("purchases_sync", { n: list ? list.size() : -1, code: String(pr.getResponseCode()) });
-    cb(pickOldToken(list));
-    return;
-  } catch (e) { log("purchases_sync_err", { m: clip(e) }); }
+  function finishWithBillingOrFallback(tok) {
+    if (tok) {
+      cb(tok);
+      return;
+    }
+    requestHostDbToken(cb);
+  }
   var PRL = Java.use("com.android.billingclient.api.PurchasesResponseListener");
   var cls = hold(Java.registerClass({
     name: "rc.PPS" + Date.now(),
@@ -437,9 +422,12 @@ function queryPurchasesThen(cb) {
       onQueryPurchasesResponse: function (br, purchases) {
         try {
           var list2 = Java.cast(purchases, Java.use("java.util.List"));
-          log("purchases", { n: list2.size(), code: String(br.getResponseCode()) });
-          cb(pickOldToken(list2));
-        } catch (e2) { log("stack_query_err", { m: clip(e2) }); }
+          log("purchases", { n: list2 ? list2.size() : 0, code: String(br.getResponseCode()) });
+          finishWithBillingOrFallback(pickOldToken(list2));
+        } catch (e2) {
+          log("stack_query_err", { m: clip(e2) });
+          finishWithBillingOrFallback("");
+        }
       }
     }
   }));
@@ -455,11 +443,24 @@ function queryPurchasesThen(cb) {
           var QP = Java.use("com.android.billingclient.api.QueryPurchasesParams");
           clientRef.queryPurchasesAsync(QP.newBuilder().setProductType("subs").build(), listener);
           log("purchases_async", { via: "params-main" });
+          return;
         } catch (e3) {
           try {
             clientRef.queryPurchasesAsync("subs", listener);
             log("purchases_async", { via: "skuType-main" });
-          } catch (e4) { log("purchases_sku_err", { m: clip(e4) }); }
+            return;
+          } catch (e4) {
+            log("purchases_sku_err", { m: clip(e4) });
+          }
+        }
+        try {
+          var pr = clientRef.queryPurchases("subs");
+          var list = pr.getPurchasesList();
+          log("purchases_sync", { n: list ? list.size() : -1, code: String(pr.getResponseCode()) });
+          finishWithBillingOrFallback(pickOldToken(list));
+        } catch (e5) {
+          log("purchases_sync_err", { m: clip(e5) });
+          finishWithBillingOrFallback("");
         }
       }
     }
@@ -493,7 +494,7 @@ function queryOfferThen(spec, oldTok) {
           for (var j = 0; j < offs.size(); j++) {
             var o = Java.cast(offs.get(j), SOD);
             var oid = String(o.getOfferId() || "");
-            log("offer", { product: pid, offerId: oid, token: String(o.getOfferToken() || "").slice(0, 12) + "..." });
+            log("offer", { product: pid, offerId: oid, hasToken: !!o.getOfferToken() });
             if (pid === spec.sku && oid === spec.offer) { hit = pd; hitOffer = o; }
             if (addon && pid === addon.sku && oid === addon.offer) { add = pd; addOffer = o; }
           }
